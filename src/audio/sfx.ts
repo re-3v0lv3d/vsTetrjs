@@ -1,11 +1,16 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   muted = false;
+  volume = 0.9;
 
   private ac(): AudioContext {
     if (!this.ctx) this.ctx = new AudioContext();
     if (this.ctx.state === 'suspended') void this.ctx.resume();
     return this.ctx;
+  }
+
+  setVolume(v: number): void {
+    this.volume = Math.max(0, Math.min(1, v));
   }
 
   private beep(
@@ -15,14 +20,15 @@ export class Sfx {
     gain = 0.08,
     slide = 0,
   ): void {
-    if (this.muted) return;
+    if (this.muted || this.volume <= 0.001) return;
     const ctx = this.ac();
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = type;
     osc.frequency.setValueAtTime(freq, ctx.currentTime);
     if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), ctx.currentTime + dur);
-    g.gain.setValueAtTime(gain, ctx.currentTime);
+    const lvl = gain * this.volume;
+    g.gain.setValueAtTime(lvl, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
     osc.connect(g);
     g.connect(ctx.destination);

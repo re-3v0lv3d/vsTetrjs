@@ -14,12 +14,19 @@ export class Renderer {
   private banner = '';
   private bannerLife = 0;
   private tSpinFlash = 0;
-  private beatPulse = 0;
+  /** Decaying impact pulse from lock / line clears (not music) */
+  private impactPulse = 0;
+  private pulseColor = THEME.lime as string;
+  private pulseScale = 1;
   private time = 0;
   private impactRings: { x: number; y: number; life: number; max: number; color: string; r: number }[] =
     [];
   private lockBurst = 0;
   private ambientSpark = 0;
+  particlesAmount = 1;
+  shakeAmount = 1;
+  pulseAmount = 1;
+  showGhost = true;
 
   constructor(canvas: HTMLCanvasElement, cellSize = 30) {
     this.canvas = canvas;
@@ -42,39 +49,58 @@ export class Renderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  setBeatPulse(p: number): void {
-    this.beatPulse = Math.max(0, Math.min(1, p));
+  private linePulseStyle(count: number, tSpin?: boolean): { color: string; strength: number; scale: number } {
+    if (tSpin) {
+      return { color: '#C77DFF', strength: 1.15 + count * 0.2, scale: 1.35 + count * 0.28 };
+    }
+    if (count >= 4) return { color: '#B8FF3C', strength: 1.55, scale: 2.1 };
+    if (count === 3) return { color: '#FFE566', strength: 1.25, scale: 1.75 };
+    if (count === 2) return { color: '#FF9F43', strength: 1.05, scale: 1.45 };
+    return { color: '#FF4D6D', strength: 0.85, scale: 1.2 };
   }
 
   triggerClear(lines: number[], board: BoardGrid, opts?: { tSpin?: boolean; label?: string }): void {
-    this.flash = opts?.tSpin ? 1.35 : 1;
+    const n = lines.length;
+    const style = this.linePulseStyle(n, opts?.tSpin);
+    this.flash = opts?.tSpin ? 1.35 : 0.85 + n * 0.15;
     if (opts?.tSpin) this.tSpinFlash = 1;
     if (opts?.label) {
       this.banner = opts.label;
-      this.bannerLife = opts.tSpin ? 1.15 : 0.7;
+      this.bannerLife = opts.tSpin ? 1.15 : 0.55 + n * 0.12;
     }
+    this.impactPulse = Math.max(this.impactPulse, style.strength * this.pulseAmount);
+    this.pulseColor = style.color;
+    this.pulseScale = style.scale;
+
     const midY =
-      lines.reduce((a, y) => a + (y - HIDDEN_ROWS + 0.5) * this.cell, 0) / Math.max(1, lines.length);
+      lines.reduce((a, y) => a + (y - HIDDEN_ROWS + 0.5) * this.cell, 0) / Math.max(1, n);
     const cx = (COLS / 2) * this.cell;
-    this.particles.ring(cx, midY, opts?.tSpin ? '#C77DFF' : THEME.lime, 12);
-    this.impactRings.push({
-      x: cx,
-      y: midY,
-      life: 0.7,
-      max: 0.7,
-      color: opts?.tSpin ? '#C77DFF' : THEME.lime,
-      r: 20,
-    });
+    const ringCount = Math.min(3, 1 + Math.floor(n / 2));
+    for (let i = 0; i < ringCount; i++) {
+      this.particles.ring(cx, midY, style.color, 10 + i * 8 + n * 4);
+      this.impactRings.push({
+        x: cx,
+        y: midY,
+        life: 0.55 + n * 0.08 + i * 0.08,
+        max: 0.55 + n * 0.08 + i * 0.08,
+        color: style.color,
+        r: 14 + i * 10 + n * 6,
+      });
+    }
+    const burstMul = this.particlesAmount;
     for (const y of lines) {
       for (let x = 0; x < COLS; x++) {
         const cell = board[y]?.[x] ?? 0;
         const { fill } = colorFor(cell === 0 ? 'T' : cell);
-        this.particles.burst(
-          (x + 0.5) * this.cell,
-          (y - HIDDEN_ROWS + 0.5) * this.cell,
-          fill,
-          opts?.tSpin ? 16 : 10,
-        );
+        const count = Math.round((opts?.tSpin ? 16 : 8 + n * 2) * burstMul);
+        if (count > 0) {
+          this.particles.burst(
+            (x + 0.5) * this.cell,
+            (y - HIDDEN_ROWS + 0.5) * this.cell,
+            fill,
+            count,
+          );
+        }
       }
     }
   }
@@ -89,11 +115,19 @@ export class Renderer {
   }
 
   triggerLockFlash(): void {
-    this.lockBurst = 0.4;
-    const cx = (COLS / 2) * this.cell;
-    const cy = (ROWS * 0.55) * this.cell;
-    this.particles.sparkle(cx + (Math.random() - 0.5) * this.cell * 4, cy, THEME.lime);
-    this.particles.sparkle(cx + (Math.random() - 0.5) * this.cell * 4, cy, '#3DE0FF');
+    // Mild cyan pulse on place; line clears override with a stronger colored pulse
+    if (this.impactPulse < 0.5) {
+      this.impactPulse = 0.55 * this.pulseAmount;
+      this.pulseColor = '#3DE0FF';
+      this.pulseScale = 1;
+    }
+    this.lockBurst = 0.35 * this.pulseAmount;
+    if (this.particlesAmount > 0.05) {
+      const cx = (COLS / 2) * this.cell;
+      const cy = (ROWS * 0.55) * this.cell;
+      this.particles.sparkle(cx + (Math.random() - 0.5) * this.cell * 4, cy, '#3DE0FF');
+      this.particles.ring(cx, cy, '#3DE0FF', 8);
+    }
   }
 
   update(dt: number): void {
@@ -101,19 +135,21 @@ export class Renderer {
     this.flash = Math.max(0, this.flash - dt * 3);
     this.tSpinFlash = Math.max(0, this.tSpinFlash - dt * 2.2);
     this.lockBurst = Math.max(0, this.lockBurst - dt * 2.8);
+    this.impactPulse = Math.max(0, this.impactPulse - dt * 2.6);
+    if (this.impactPulse < 0.05) this.pulseScale = 1;
     this.bannerLife = Math.max(0, this.bannerLife - dt);
     if (this.bannerLife <= 0) this.banner = '';
     for (const r of this.impactRings) {
       r.life -= dt;
-      r.r += 140 * dt;
+      r.r += (120 + this.pulseScale * 40) * dt;
     }
     this.impactRings = this.impactRings.filter((r) => r.life > 0);
     this.particles.update(dt);
 
     this.ambientSpark -= dt;
     if (this.ambientSpark <= 0) {
-      this.ambientSpark = 0.12 + Math.random() * 0.2;
-      if (Math.random() < 0.55) {
+      this.ambientSpark = 0.18 + Math.random() * 0.25;
+      if (this.particlesAmount > 0.2 && Math.random() < 0.35 * this.particlesAmount) {
         this.particles.sparkle(
           Math.random() * COLS * this.cell,
           Math.random() * ROWS * this.cell,
@@ -130,11 +166,12 @@ export class Renderer {
     const { ctx, cell } = this;
     const w = COLS * cell;
     const h = ROWS * cell;
-    const pulse = this.beatPulse;
-    const breathe = 0.5 + 0.5 * Math.sin(this.time * 2.4);
+    const pulse = this.impactPulse;
+    const pScale = this.pulseScale;
+    const pColor = this.pulseColor;
     const danger = this.stackDanger(snap);
 
-    const shakeAmt = snap.shake * 8 + pulse * danger * 1.2;
+    const shakeAmt = (snap.shake * 8 + pulse * 2.5 * pScale) * this.shakeAmount;
     const shakeX = (Math.random() - 0.5) * shakeAmt;
     const shakeY = (Math.random() - 0.5) * shakeAmt;
 
@@ -150,17 +187,19 @@ export class Renderer {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // ambient radial pulse
-    const amb = ctx.createRadialGradient(w * 0.5, h * 0.35, 10, w * 0.5, h * 0.5, h * 0.75);
-    amb.addColorStop(0, `rgba(184, 255, 60, ${0.04 + pulse * 0.07 + breathe * 0.02})`);
-    amb.addColorStop(0.55, `rgba(61, 224, 255, ${0.02 + pulse * 0.03})`);
-    amb.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = amb;
-    ctx.fillRect(0, 0, w, h);
+    // impact radial wash
+    if (pulse > 0.02) {
+      const amb = ctx.createRadialGradient(w * 0.5, h * 0.5, 8, w * 0.5, h * 0.5, h * (0.45 + pScale * 0.2));
+      amb.addColorStop(0, this.rgba(pColor, 0.08 + pulse * 0.14 * pScale));
+      amb.addColorStop(0.55, this.rgba(pColor, 0.03 + pulse * 0.05));
+      amb.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = amb;
+      ctx.fillRect(0, 0, w, h);
+    }
 
     if (danger > 0.25) {
       const dg = ctx.createLinearGradient(0, 0, 0, h * 0.45);
-      dg.addColorStop(0, `rgba(255, 77, 109, ${(0.08 + pulse * 0.12) * danger})`);
+      dg.addColorStop(0, `rgba(255, 77, 109, ${(0.08 + pulse * 0.1) * danger})`);
       dg.addColorStop(1, 'rgba(255, 77, 109, 0)');
       ctx.fillStyle = dg;
       ctx.fillRect(0, 0, w, h * 0.45);
@@ -184,17 +223,18 @@ export class Renderer {
     }
 
     if (snap.active && !opts.blind) {
-      const ghost = { ...snap.active, y: snap.ghostY };
-      for (const [x, y] of cellsOf(ghost)) {
-        if (y >= HIDDEN_ROWS) {
-          this.drawBlock(x, y - HIDDEN_ROWS, snap.active.id, 0.18 + pulse * 0.08, true);
+      if (this.showGhost) {
+        const ghost = { ...snap.active, y: snap.ghostY };
+        for (const [x, y] of cellsOf(ghost)) {
+          if (y >= HIDDEN_ROWS) {
+            this.drawBlock(x, y - HIDDEN_ROWS, snap.active.id, 0.2 + pulse * 0.06, true);
+          }
         }
       }
-      const piecePulse = 0.55 + pulse * 0.45 + breathe * 0.15;
       for (const [x, y] of cellsOf(snap.active)) {
         if (y >= HIDDEN_ROWS) {
           this.drawBlock(x, y - HIDDEN_ROWS, snap.active.id, 1, false, {
-            pulse: piecePulse,
+            pulse: 0.4 + pulse * 0.55 * pScale,
             active: true,
           });
         }
@@ -219,12 +259,12 @@ export class Renderer {
     }
 
     if (this.flash > 0) {
-      ctx.fillStyle = `rgba(184, 255, 60, ${this.flash * 0.18})`;
+      ctx.fillStyle = this.rgba(pColor, this.flash * 0.16 * pScale);
       ctx.fillRect(0, 0, w, h);
     }
 
     if (this.lockBurst > 0) {
-      ctx.fillStyle = `rgba(232, 240, 245, ${this.lockBurst * 0.12})`;
+      ctx.fillStyle = `rgba(61, 224, 255, ${this.lockBurst * 0.1})`;
       ctx.fillRect(0, 0, w, h);
     }
 
@@ -239,41 +279,50 @@ export class Renderer {
       ctx.shadowBlur = 0;
     }
 
-    // pulsing frame
-    const frameA = 0.25 + pulse * 0.45 + danger * 0.25;
-    ctx.strokeStyle = danger > 0.45
-      ? `rgba(255, 77, 109, ${frameA})`
-      : `rgba(184, 255, 60, ${frameA * 0.75})`;
-    ctx.lineWidth = 2 + pulse * 1.5;
-    ctx.shadowColor = danger > 0.45 ? THEME.coral : THEME.lime;
-    ctx.shadowBlur = 8 + pulse * 18 + danger * 10;
-    ctx.strokeRect(1.5, 1.5, w - 3, h - 3);
+    // impact frame (bigger / tinted on multi-line)
+    const frameA = 0.22 + pulse * 0.55 * pScale + danger * 0.2;
+    const frameCol = pulse > 0.08 ? pColor : danger > 0.45 ? THEME.coral : THEME.lime;
+    ctx.strokeStyle = this.rgba(frameCol, frameA);
+    ctx.lineWidth = 2 + pulse * 2.2 * pScale;
+    ctx.shadowColor = frameCol;
+    ctx.shadowBlur = 6 + pulse * 22 * pScale + danger * 8;
+    const inset = Math.max(0, 1.5 - pulse * pScale);
+    ctx.strokeRect(inset, inset, w - inset * 2, h - inset * 2);
+    if (pulse > 0.25 && pScale > 1.15) {
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = pulse * 0.5;
+      ctx.strokeRect(
+        inset - 3 * pScale,
+        inset - 3 * pScale,
+        w - inset * 2 + 6 * pScale,
+        h - inset * 2 + 6 * pScale,
+      );
+      ctx.globalAlpha = 1;
+    }
     ctx.shadowBlur = 0;
 
-    // corner ticks that pulse
-    this.drawCorners(w, h, pulse, danger);
+    this.drawCorners(w, h, pulse, danger, frameCol);
 
     if (this.banner && this.bannerLife > 0) {
       const a = Math.min(1, this.bannerLife * 2);
-      const scale = 1 + (1 - Math.min(1, this.bannerLife * 3)) * 0.12 + pulse * 0.04;
+      const scale = 1 + (1 - Math.min(1, this.bannerLife * 3)) * 0.12 + pulse * 0.06 * pScale;
       ctx.save();
       ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(7, 16, 24, 0.6)';
       ctx.fillRect(0, h * 0.38, w, h * 0.18);
       ctx.translate(w / 2, h * 0.47);
       ctx.scale(scale, scale);
-      ctx.fillStyle = this.banner.includes('T-SPIN') ? '#C77DFF' : THEME.lime;
+      ctx.fillStyle = this.banner.includes('T-SPIN') ? '#C77DFF' : pColor;
       ctx.font = `800 ${Math.max(14, Math.floor(cell * 0.72))}px Syne, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.shadowColor = ctx.fillStyle;
-      ctx.shadowBlur = 18 + pulse * 12;
+      ctx.shadowBlur = 18 + pulse * 14 * pScale;
       ctx.fillText(this.banner, 0, 0);
       ctx.restore();
     }
 
-    // scanlines with pulse opacity
-    ctx.fillStyle = `rgba(0,0,0,${0.1 + pulse * 0.04})`;
+    ctx.fillStyle = `rgba(0,0,0,${0.1 + pulse * 0.03})`;
     for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
 
     // soft vignette
@@ -311,16 +360,27 @@ export class Renderer {
       ctx.shadowBlur = 0;
     }
 
-    // expose CSS vars for UI sync
     const wrap = this.canvas.parentElement;
     if (wrap) {
       wrap.style.setProperty('--board-pulse', String(pulse.toFixed(3)));
       wrap.style.setProperty('--board-danger', String(danger.toFixed(3)));
+      wrap.style.setProperty('--pulse-color', pColor);
+      wrap.style.setProperty('--pulse-scale', String(pScale.toFixed(2)));
       wrap.classList.toggle('is-danger', danger > 0.45);
-      wrap.classList.toggle('is-clearing', this.flash > 0.2);
+      wrap.classList.toggle('is-clearing', this.flash > 0.2 || pulse > 0.35);
+      wrap.classList.toggle('is-lock-pulse', pulse > 0.1 && pScale <= 1.05);
     }
 
     ctx.restore();
+  }
+
+  private rgba(hex: string, a: number): string {
+    const h = hex.replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
   }
 
   drawMini(board: BoardGrid | number[] | null, canvas: HTMLCanvasElement, blind = false): void {
@@ -389,10 +449,10 @@ export class Renderer {
     return Math.min(1, (10 - top) / 10);
   }
 
-  private drawCorners(w: number, h: number, pulse: number, danger: number): void {
+  private drawCorners(w: number, h: number, pulse: number, danger: number, color?: string): void {
     const { ctx } = this;
-    const len = 10 + pulse * 6;
-    const col = danger > 0.45 ? THEME.coral : THEME.lime;
+    const len = 10 + pulse * 8 * this.pulseScale;
+    const col = color ?? (danger > 0.45 ? THEME.coral : THEME.lime);
     ctx.strokeStyle = col;
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.4 + pulse * 0.5;

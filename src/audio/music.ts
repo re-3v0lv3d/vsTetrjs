@@ -1,211 +1,228 @@
-/** Catchy melodic arcade loop (Web Audio, no assets) */
+export type MusicBed = 'menu' | 'game' | 'none';
+
+const FADE_IN_S = 1.6;
+const FADE_OUT_S = 2.2;
+
+function asset(path: string): string {
+  const base = import.meta.env.BASE_URL || './';
+  return `${base}${path.replace(/^\//, '')}`;
+}
+
+const TRACKS = {
+  menu: asset('audio/menu.mp3'),
+  game: [asset('audio/game1.mp3'), asset('audio/game2.mp3'), asset('audio/game3.mp3')],
+} as const;
+
+/** Streamed MP3 beds with fade in/out at track edges */
 export class MusicSynth {
-  private ctx: AudioContext | null = null;
-  private master: GainNode | null = null;
-  private comp: DynamicsCompressorNode | null = null;
-  private timer: number | null = null;
-  private step = 0;
-  private playing = false;
   muted = false;
+  volume = 0.85;
   intensity = 1;
 
-  private ensure(): AudioContext {
-    if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = 0.16;
-      this.comp = this.ctx.createDynamicsCompressor();
-      this.comp.threshold.value = -18;
-      this.comp.knee.value = 12;
-      this.comp.ratio.value = 4;
-      this.comp.attack.value = 0.01;
-      this.comp.release.value = 0.2;
-      this.master.connect(this.comp);
-      this.comp.connect(this.ctx.destination);
-    }
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
-    return this.ctx;
+  private bed: MusicBed = 'none';
+  private audio: HTMLAudioElement | null = null;
+  private gameIndex = 0;
+  private unlocked = false;
+  private fadeToken = 0;
+  private ending = false;
+  private advancing = false;
+  private watchTimer: number | null = null;
+
+  unlock(): void {
+    this.unlocked = true;
   }
 
+  /** @deprecated use playMenu / playGame */
   start(): void {
-    if (this.playing) return;
-    this.ensure();
-    this.playing = true;
-    this.step = 0;
-    this.startedAt = performance.now();
-    this.schedule();
+    this.unlock();
+    if (this.bed === 'none') void this.playMenu();
+  }
+
+  playMenu(): void {
+    this.unlocked = true;
+    void this.switchBed('menu');
+  }
+
+  playGame(): void {
+    this.unlocked = true;
+    if (this.bed !== 'game') {
+      this.gameIndex = Math.floor(Math.random() * TRACKS.game.length);
+    }
+    void this.switchBed('game');
   }
 
   stop(): void {
-    this.playing = false;
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
+    void this.switchBed('none');
+  }
+
+  /** Resume after autoplay block or unmute */
+  async ensurePlaying(): Promise<void> {
+    if (!this.unlocked || this.bed === 'none') return;
+    if (this.audio) {
+      if (this.audio.paused) {
+        try {
+          await this.audio.play();
+        } catch {
+          return;
+        }
+      }
+      if (!this.ending) await this.fadeTo(this.targetVolume(), FADE_IN_S * 0.6);
+      return;
     }
+    await this.startCurrentTrack(true);
   }
 
   setIntensity(level: number): void {
     this.intensity = Math.max(0.7, Math.min(2, level));
-    if (this.master && this.ctx) {
-      const base = this.muted ? 0 : 0.12 + this.intensity * 0.035;
-      this.master.gain.setTargetAtTime(base, this.ctx.currentTime, 0.25);
-    }
+    this.applyTargetVolume(0.2);
+  }
+
+  setVolume(v: number): void {
+    this.volume = Math.max(0, Math.min(1, v));
+    this.applyTargetVolume(0.08);
   }
 
   setMuted(m: boolean): void {
     this.muted = m;
-    if (this.master && this.ctx) {
-      this.master.gain.setTargetAtTime(m ? 0 : 0.16, this.ctx.currentTime, 0.05);
-    }
-  }
-
-  private startedAt = 0;
-
-  /** 0–1 continuous pulse synced to BPM (visuals) */
-  getPulse(): number {
-    const bpm = this.getBpm();
-    const t = this.playing && this.startedAt
-      ? (performance.now() - this.startedAt) / 1000
-      : performance.now() / 1000;
-    const beatPhase = (t * bpm) / 60; // beats
-    const frac = beatPhase - Math.floor(beatPhase);
-    // sharp kick envelope + softer eighth
-    const kick = Math.pow(1 - frac, 2.4);
-    const eighth = Math.pow(1 - ((beatPhase * 2) % 1), 1.8) * 0.35;
-    const breathe = 0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 2);
-    return Math.min(1, kick * 0.85 + eighth + breathe * 0.12);
+    if (!m) void this.ensurePlaying();
+    else this.applyTargetVolume(0.05);
   }
 
   getBpm(): number {
     return 112 + (this.intensity - 1) * 6;
   }
 
-  private schedule(): void {
-    if (!this.playing || !this.ctx || !this.master) return;
-    const bpm = this.getBpm();
-    const stepDur = 60 / bpm / 4;
-
-    this.playStep(this.step % 64, this.ctx.currentTime + 0.01);
-    this.step++;
-    this.timer = window.setTimeout(() => this.schedule(), stepDur * 1000);
+  private targetVolume(): number {
+    if (this.muted || this.bed === 'none') return 0;
+    // Keep headroom; intensity nudges game bed a bit
+    const base = this.bed === 'game' ? 0.55 + this.intensity * 0.06 : 0.52;
+    return Math.min(1, base * this.volume);
   }
 
-  private tone(
-    freq: number,
-    t: number,
-    dur: number,
-    type: OscillatorType,
-    gain: number,
-    filterFreq?: number,
-  ): void {
-    if (!this.ctx || !this.master || freq <= 0) return;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.015);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    if (filterFreq) {
-      const f = this.ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = filterFreq;
-      osc.connect(f);
-      f.connect(g);
-    } else {
-      osc.connect(g);
-    }
-    g.connect(this.master);
-    osc.start(t);
-    osc.stop(t + dur + 0.02);
+  private applyTargetVolume(smoothS: number): void {
+    if (!this.audio || this.ending) return;
+    void this.fadeTo(this.targetVolume(), smoothS);
   }
 
-  private noise(t: number, dur: number, gain: number, hp: number): void {
-    if (!this.ctx || !this.master) return;
-    const n = Math.floor(this.ctx.sampleRate * dur);
-    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.value = hp;
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.master);
-    src.start(t);
-    src.stop(t + dur);
+  private async switchBed(next: MusicBed): Promise<void> {
+    if (next === this.bed && this.audio && !this.audio.paused) return;
+    this.bed = next;
+    await this.tearDown(true);
+    if (next === 'none' || !this.unlocked) return;
+    await this.startCurrentTrack(true);
   }
 
-  private playStep(step: number, t: number): void {
-    if (!this.ctx || !this.master || this.muted) return;
+  private currentUrl(): string | null {
+    if (this.bed === 'menu') return TRACKS.menu;
+    if (this.bed === 'game') return TRACKS.game[this.gameIndex % TRACKS.game.length]!;
+    return null;
+  }
 
-    // --- Drums (lighter, leave room for melody) ---
-    if (step % 4 === 0) {
-      this.tone(150, t, 0.14, 'sine', 0.55);
-      this.tone(55, t, 0.16, 'triangle', 0.35);
-    }
-    if (step % 8 === 4) this.noise(t, 0.09, 0.16, 900);
-    if (step % 2 === 1) this.noise(t, 0.025, 0.045, 8000);
+  private async startCurrentTrack(fadeIn: boolean): Promise<void> {
+    const url = this.currentUrl();
+    if (!url) return;
 
-    // Chord roots per bar (Am – F – C – G), 16 steps each bar in 64-loop = 4 bars
-    const bassProg = [110, 87.31, 130.81, 98];
-    const bar = Math.floor(step / 16) % 4;
-    const root = bassProg[bar]!;
-    if (step % 4 === 0) {
-      this.tone(root, t, 0.28, 'sawtooth', 0.1, 220 + this.intensity * 40);
-      this.tone(root * 2, t, 0.22, 'triangle', 0.04, 600);
-    } else if (step % 4 === 2) {
-      this.tone(root * 1.5, t, 0.12, 'triangle', 0.045, 500);
-    }
+    const a = new Audio(url);
+    a.preload = 'auto';
+    a.loop = false;
+    a.volume = 0;
+    this.audio = a;
+    this.ending = false;
 
-    // Soft pad on downbeats
-    if (step % 16 === 0) {
-      const thirds = [root * 1.2, root * 1.5, root * 1.25, root * 1.5];
-      this.tone(thirds[bar]! * 2, t, 0.9, 'sine', 0.03);
-    }
+    a.addEventListener('ended', () => {
+      void this.onTrackEnded();
+    });
 
-    // --- Hook melody (catchy 2-bar phrases, 32-step) ---
-    // A minor-ish hook: memorable leap + stepwise answer
-    const A4 = 440;
-    const B4 = 493.88;
-    const C5 = 523.25;
-    const D5 = 587.33;
-    const E5 = 659.25;
-    const F5 = 698.46;
-    const G5 = 783.99;
-    const _ = 0;
-
-    const melody: number[] = [
-      // phrase A
-      E5, _, E5, _, B4, C5, D5, _,
-      D5, _, C5, B4, A4, _, A4, C5,
-      // phrase B
-      E5, _, D5, C5, B4, _, B4, C5,
-      D5, _, E5, _, A4, _, _, _,
-      // phrase A'
-      E5, _, E5, _, B4, C5, D5, _,
-      D5, _, C5, B4, A4, _, C5, E5,
-      // phrase C (lift)
-      G5, _, F5, E5, D5, _, E5, C5,
-      B4, _, C5, D5, A4, _, _, _,
-    ];
-
-    const note = melody[step % melody.length]!;
-    if (note > 0) {
-      const leadGain = 0.07 + Math.min(this.intensity, 1.6) * 0.02;
-      this.tone(note, t, 0.18, 'triangle', leadGain);
-      this.tone(note * 2, t, 0.1, 'square', leadGain * 0.22, 3200);
+    try {
+      await a.play();
+    } catch {
+      // Autoplay blocked until next gesture
+      return;
     }
 
-    // Counter-melody every other cycle half (steps 32-63 echo)
-    if (step >= 32 && step % 4 === 2) {
-      const echo = melody[(step - 32) % 32]!;
-      if (echo > 0) this.tone(echo / 2, t, 0.14, 'sine', 0.035);
+    if (fadeIn) await this.fadeTo(this.targetVolume(), FADE_IN_S);
+    else a.volume = this.targetVolume();
+
+    this.armEndWatcher(a);
+  }
+
+  private armEndWatcher(a: HTMLAudioElement): void {
+    if (this.watchTimer !== null) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = null;
     }
+    this.watchTimer = window.setInterval(() => {
+      if (this.audio !== a || this.ending) return;
+      if (!Number.isFinite(a.duration) || a.duration <= 0) return;
+      const left = a.duration - a.currentTime;
+      if (left <= FADE_OUT_S + 0.05) {
+        this.ending = true;
+        void this.fadeTo(0, Math.max(0.25, left)).then(() => {
+          if (this.audio === a) void this.onTrackEnded();
+        });
+      }
+    }, 120);
+  }
+
+  private async onTrackEnded(): Promise<void> {
+    if (this.bed === 'none' || this.advancing) return;
+    this.advancing = true;
+    try {
+      await this.tearDown(false);
+      if (this.bed === 'game') {
+        this.gameIndex = (this.gameIndex + 1) % TRACKS.game.length;
+      }
+      if (this.bed === 'menu' || this.bed === 'game') {
+        await this.startCurrentTrack(true);
+      }
+    } finally {
+      this.advancing = false;
+    }
+  }
+
+  private async tearDown(fadeOut: boolean): Promise<void> {
+    if (this.watchTimer !== null) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = null;
+    }
+    const a = this.audio;
+    this.audio = null;
+    if (!a) return;
+    if (fadeOut && a.volume > 0.01 && !a.paused) {
+      this.audio = a; // fadeTo uses this.audio
+      await this.fadeTo(0, Math.min(FADE_OUT_S, 1.1));
+      this.audio = null;
+    }
+    a.pause();
+    a.removeAttribute('src');
+    a.load();
+  }
+
+  private fadeTo(target: number, seconds: number): Promise<void> {
+    const a = this.audio;
+    if (!a) return Promise.resolve();
+    const token = ++this.fadeToken;
+    const from = a.volume;
+    const dur = Math.max(0.05, seconds) * 1000;
+    const t0 = performance.now();
+
+    return new Promise((resolve) => {
+      const step = (now: number) => {
+        if (token !== this.fadeToken || this.audio !== a) {
+          resolve();
+          return;
+        }
+        const t = Math.min(1, (now - t0) / dur);
+        // smoothstep
+        const e = t * t * (3 - 2 * t);
+        a.volume = Math.max(0, Math.min(1, from + (target - from) * e));
+        if (t < 1) requestAnimationFrame(step);
+        else {
+          a.volume = Math.max(0, Math.min(1, target));
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
   }
 }

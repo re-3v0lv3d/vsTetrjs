@@ -1,20 +1,70 @@
-export type ScreenId = 'menu' | 'versus-setup' | 'game' | 'result';
+export type ScreenId = 'menu' | 'versus-setup' | 'settings' | 'game' | 'result';
 
 export function renderAppShell(root: HTMLElement): void {
   root.innerHTML = `
     <div class="atmosphere" aria-hidden="true"></div>
+    <canvas id="menuFx" class="menu-fx" aria-hidden="true"></canvas>
     <div class="scanlines" aria-hidden="true"></div>
 
     <section id="screen-menu" class="screen screen-menu active">
       <div class="hero">
-        <p class="eyebrow">ARCADE REWORK</p>
-        <h1 class="brand" data-text="VSTETR.JS">VSTETR.JS</h1>
+        <div class="hero-orbit" aria-hidden="true">
+          <span class="orbit-ring"></span>
+          <span class="orbit-ring orbit-ring-2"></span>
+          <span class="orbit-spark"></span>
+        </div>
+        <p class="eyebrow"><span class="eyebrow-line"></span>ARCADE REWORK<span class="eyebrow-line"></span></p>
+        <h1 class="brand" data-text="VSTETR.JS">
+          <span class="brand-glitch" data-text="VSTETR.JS">VSTETR.JS</span>
+        </h1>
         <p class="tagline">Caída libre. Basura al rival. Ritmo que no perdona.</p>
         <div class="cta-row">
-          <button class="btn btn-primary" data-action="solo">Jugar solo</button>
-          <button class="btn btn-secondary" data-action="versus">Versus online</button>
+          <button class="btn btn-primary btn-glow" data-action="solo">Jugar solo</button>
+          <button class="btn btn-secondary btn-glow-soft" data-action="versus">Versus online</button>
         </div>
-        <button class="btn-text" data-action="toggle-mute" id="menuMute">Sonido: ON</button>
+        <div class="menu-links">
+          <button class="btn-text" data-action="open-settings">Ajustes</button>
+          <button class="btn-text" data-action="toggle-mute" id="menuMute">Sonido: ON</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-settings" class="screen screen-settings">
+      <div class="panel-card settings-card">
+        <button class="btn-back" data-action="back-menu">← Menú</button>
+        <h2>Ajustes</h2>
+        <p class="panel-sub">Toca los parámetros. Se guardan en este dispositivo.</p>
+        <form id="settingsForm" class="settings-form" onsubmit="return false">
+          <label class="setting-row">
+            <span>Música <em data-val="music">85%</em></span>
+            <input name="music" type="range" min="0" max="100" step="1" />
+          </label>
+          <label class="setting-row">
+            <span>Efectos <em data-val="sfx">90%</em></span>
+            <input name="sfx" type="range" min="0" max="100" step="1" />
+          </label>
+          <label class="setting-row">
+            <span>Zoom UI <em data-val="uiScale">100%</em></span>
+            <input name="uiScale" type="range" min="70" max="125" step="5" />
+          </label>
+          <label class="setting-row">
+            <span>Partículas <em data-val="particles">100%</em></span>
+            <input name="particles" type="range" min="0" max="100" step="5" />
+          </label>
+          <label class="setting-row">
+            <span>Shake <em data-val="shake">100%</em></span>
+            <input name="shake" type="range" min="0" max="100" step="5" />
+          </label>
+          <label class="setting-row">
+            <span>Pulso visual <em data-val="pulse">100%</em></span>
+            <input name="pulse" type="range" min="0" max="100" step="5" />
+          </label>
+          <label class="setting-check">
+            <input name="ghost" type="checkbox" />
+            <span>Mostrar pieza fantasma</span>
+          </label>
+          <button type="button" class="btn btn-secondary btn-block" data-action="reset-settings">Restablecer</button>
+        </form>
       </div>
     </section>
 
@@ -130,6 +180,7 @@ export function showScreen(id: ScreenId): void {
   const map: Record<ScreenId, string> = {
     menu: 'screen-menu',
     'versus-setup': 'screen-versus',
+    settings: 'screen-settings',
     game: 'screen-game',
     result: 'screen-result',
   };

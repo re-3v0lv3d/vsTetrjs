@@ -8,7 +8,9 @@ import { PeerRoom } from './net/peerRoom';
 import type { NetMessage } from './net/protocol';
 import { Renderer } from './render/renderer';
 import { activeEffectLabels, updateHud } from './ui/hud';
-import { renderAppShell, showScreen } from './ui/screens';
+import { MenuFx } from './ui/menuFx';
+import { bindSettingsForm, loadSettings, saveSettings, type Settings } from './ui/settings';
+import { renderAppShell, showScreen, type ScreenId } from './ui/screens';
 
 type AppMode = 'menu' | 'solo' | 'versus';
 
@@ -20,6 +22,7 @@ const sfx = new Sfx();
 const input = new InputController();
 const unbindKeys = input.bind();
 
+let settings: Settings = loadSettings();
 let mode: AppMode = 'menu';
 let engine: GameEngine | null = null;
 let renderer: Renderer | null = null;
@@ -38,6 +41,8 @@ let lastStateSend = 0;
 let versusStarted = false;
 
 const boardCanvas = () => document.getElementById('board') as HTMLCanvasElement;
+const menuFxCanvas = document.getElementById('menuFx') as HTMLCanvasElement;
+const menuFx = new MenuFx(menuFxCanvas);
 
 function setMute(next: boolean): void {
   muted = next;
@@ -51,43 +56,51 @@ function setMute(next: boolean): void {
 }
 
 function unlockAudio(): void {
-  music.start();
+  music.unlock();
   music.setMuted(muted);
+  music.setVolume(settings.music);
 }
 
-const UI_SCALE_MIN = 0.7;
-const UI_SCALE_MAX = 1.25;
-const UI_SCALE_STEP = 0.1;
-const UI_SCALE_KEY = 'vstetr-ui-scale';
-
-let uiScale = loadUiScale();
-
-function loadUiScale(): number {
-  const raw = Number(localStorage.getItem(UI_SCALE_KEY));
-  if (!Number.isFinite(raw)) return 1;
-  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, Math.round(raw * 10) / 10));
-}
-
-function applyUiScale(): void {
-  document.documentElement.style.setProperty('--ui-scale', String(uiScale));
+function applySettings(next: Settings, persist = true): void {
+  settings = next;
+  if (persist) saveSettings(settings);
+  music.setVolume(settings.music);
+  sfx.setVolume(settings.sfx);
+  document.documentElement.style.setProperty('--ui-scale', String(settings.uiScale));
   const label = document.getElementById('uiZoomLabel');
-  if (label) label.textContent = `${Math.round(uiScale * 100)}%`;
-  renderer?.resize(cellSize());
+  if (label) label.textContent = `${Math.round(settings.uiScale * 100)}%`;
+  if (renderer) {
+    renderer.particlesAmount = settings.particles;
+    renderer.shakeAmount = settings.shake;
+    renderer.pulseAmount = settings.pulse;
+    renderer.showGhost = settings.ghost;
+    renderer.resize(cellSize());
+  }
 }
 
 function bumpUiScale(delta: number): void {
-  uiScale = Math.min(
-    UI_SCALE_MAX,
-    Math.max(UI_SCALE_MIN, Math.round((uiScale + delta) * 10) / 10),
-  );
-  localStorage.setItem(UI_SCALE_KEY, String(uiScale));
-  applyUiScale();
+  const next = {
+    ...settings,
+    uiScale: Math.min(1.25, Math.max(0.7, Math.round((settings.uiScale + delta) * 10) / 10)),
+  };
+  applySettings(next);
   sfx.ui();
+}
+
+function goScreen(id: ScreenId): void {
+  showScreen(id);
+  if (id === 'menu' || id === 'settings' || id === 'versus-setup') {
+    menuFx.start();
+    music.playMenu();
+  } else {
+    menuFx.stop();
+  }
 }
 
 function cellSize(): number {
   const w = window.innerWidth;
   const h = window.innerHeight;
+  const uiScale = settings.uiScale;
   if (w <= 860) {
     // Leave room for left rail (~30%) + HUD + touch pad
     const touchBudget = 150 * uiScale;
@@ -126,12 +139,13 @@ function stopLoop(): void {
 
 function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
   stopLoop();
-  showScreen('game');
+  goScreen('game');
   setVersusUI(gameMode === 'versus');
   mode = gameMode;
 
   const canvas = boardCanvas();
   renderer = new Renderer(canvas, cellSize());
+  applySettings(settings, false);
 
   engine = new GameEngine(gameMode, seed, {
     onMove: () => sfx.move(),
@@ -166,7 +180,7 @@ function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
   input.setEnabled(false);
 
   music.setIntensity(gameMode === 'versus' ? 1.4 : 1);
-  music.start();
+  music.playGame();
 
   void runCountdown().then(() => {
     if (!engine) return;
@@ -201,16 +215,11 @@ function loop(now: number): void {
 
   input.update(dt);
   engine.update(dt);
-  renderer.setBeatPulse(music.getPulse());
   renderer.update(dt);
 
   const snap = engine.snapshot();
   const blind = performance.now() < snap.effects.blindUntil;
   renderer.draw(snap, { blind });
-
-  // sync UI pulse vars for CSS
-  document.documentElement.style.setProperty('--beat', music.getPulse().toFixed(3));
-  document.body.classList.toggle('vs-pulse-hot', music.getPulse() > 0.75);
 
   updateHud(app, snap, {
     rivalScore,
@@ -292,7 +301,7 @@ function endMatch(title: string, sub: string): void {
   const s = document.getElementById('resultSub');
   if (t) t.textContent = title;
   if (s) s.textContent = sub;
-  showScreen('result');
+  goScreen('result');
 }
 
 function ensureRoom(): PeerRoom {
@@ -433,11 +442,10 @@ async function joinRoom(): Promise<void> {
 
 function exitToMenu(): void {
   stopLoop();
-  music.stop();
   void room?.destroy();
   room = null;
   mode = 'menu';
-  showScreen('menu');
+  goScreen('menu');
 }
 
 app.addEventListener('click', (e) => {
@@ -461,8 +469,14 @@ app.addEventListener('click', (e) => {
       startEngine('solo', Date.now());
       break;
     case 'versus':
+      unlockAudio();
       sfx.ui();
-      showScreen('versus-setup');
+      goScreen('versus-setup');
+      break;
+    case 'open-settings':
+      unlockAudio();
+      sfx.ui();
+      goScreen('settings');
       break;
     case 'back-menu':
       exitToMenu();
@@ -479,15 +493,17 @@ app.addEventListener('click', (e) => {
       sfx.ui();
       break;
     }
-    case 'toggle-mute':
-      setMute(!muted);
+    case 'toggle-mute': {
       unlockAudio();
+      setMute(!muted);
+      if (!muted) void music.ensurePlaying();
       break;
+    }
     case 'ui-zoom-in':
-      bumpUiScale(UI_SCALE_STEP);
+      bumpUiScale(0.1);
       break;
     case 'ui-zoom-out':
-      bumpUiScale(-UI_SCALE_STEP);
+      bumpUiScale(-0.1);
       break;
     case 'exit-game':
       exitToMenu();
@@ -536,6 +552,7 @@ window.addEventListener('pointercancel', () => {
 
 window.addEventListener('resize', () => {
   renderer?.resize(cellSize());
+  menuFx.resize();
 });
 
 window.addEventListener('beforeunload', () => {
@@ -543,5 +560,12 @@ window.addEventListener('beforeunload', () => {
   void room?.destroy();
 });
 
-applyUiScale();
-showScreen('menu');
+const settingsForm = document.getElementById('settingsForm');
+if (settingsForm) {
+  bindSettingsForm(settingsForm, settings, (next) => {
+    applySettings(next);
+  });
+}
+
+applySettings(settings, false);
+goScreen('menu');
