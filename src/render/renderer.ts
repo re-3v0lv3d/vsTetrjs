@@ -130,6 +130,32 @@ export class Renderer {
     }
   }
 
+  triggerKo(won: boolean): void {
+    this.impactPulse = 1.6 * this.pulseAmount;
+    this.pulseColor = won ? THEME.lime : THEME.coral;
+    this.pulseScale = 2.2;
+    this.flash = 1.2;
+    const cx = (COLS / 2) * this.cell;
+    const cy = (ROWS / 2) * this.cell;
+    this.particles.ring(cx, cy, this.pulseColor, 20);
+    this.particles.ring(cx, cy, this.pulseColor, 8);
+    this.impactRings.push({
+      x: cx,
+      y: cy,
+      life: 1.1,
+      max: 1.1,
+      color: this.pulseColor,
+      r: 24,
+    });
+  }
+
+  triggerComboPulse(combo: number): void {
+    if (combo < 1) return;
+    this.impactPulse = Math.max(this.impactPulse, (0.7 + combo * 0.12) * this.pulseAmount);
+    this.pulseColor = combo >= 4 ? '#FFE566' : combo >= 2 ? '#FF9F43' : THEME.lime;
+    this.pulseScale = Math.min(2.2, 1.15 + combo * 0.18);
+  }
+
   update(dt: number): void {
     this.time += dt;
     this.flash = Math.max(0, this.flash - dt * 3);

@@ -3,11 +3,12 @@ import { MusicSynth } from './audio/music';
 import { Sfx } from './audio/sfx';
 import { GameEngine } from './game/engine';
 import { InputController } from './game/input';
+import { formatTime, modeLabel, type SoloKind } from './game/modes';
 import { isSelfBuff, POWERUPS, type PowerupId } from './game/powerups';
 import { PeerRoom } from './net/peerRoom';
 import type { NetMessage } from './net/protocol';
 import { Renderer } from './render/renderer';
-import { activeEffectLabels, updateHud } from './ui/hud';
+import { activeEffectLabels, flashComboBurst, updateHud } from './ui/hud';
 import { MenuFx } from './ui/menuFx';
 import { bindSettingsForm, loadSettings, saveSettings, type Settings } from './ui/settings';
 import { renderAppShell, showScreen, type ScreenId } from './ui/screens';
@@ -24,6 +25,7 @@ const unbindKeys = input.bind();
 
 let settings: Settings = loadSettings();
 let mode: AppMode = 'menu';
+let soloKind: SoloKind = 'marathon';
 let engine: GameEngine | null = null;
 let renderer: Renderer | null = null;
 let raf = 0;
@@ -36,9 +38,18 @@ let rivalScore = 0;
 let rivalBlind = false;
 let rivalBlindUntil = 0;
 let gameRunning = false;
-let pendingRematch = false;
 let lastStateSend = 0;
 let versusStarted = false;
+let localReady = false;
+let rivalReady = false;
+let iWantRematch = false;
+let rivalWantsRematch = false;
+let pingRtt: number | null = null;
+let pingSeq = 0;
+let lastPingSent: { n: number; t: number } | null = null;
+let lastPingAt = 0;
+let linkOk = false;
+let endingCinematic = false;
 
 const boardCanvas = () => document.getElementById('board') as HTMLCanvasElement;
 const menuFxCanvas = document.getElementById('menuFx') as HTMLCanvasElement;
@@ -89,11 +100,64 @@ function bumpUiScale(delta: number): void {
 
 function goScreen(id: ScreenId): void {
   showScreen(id);
-  if (id === 'menu' || id === 'settings' || id === 'versus-setup') {
+  if (id === 'menu' || id === 'solo-modes' || id === 'settings' || id === 'versus-setup') {
     menuFx.start();
     music.playMenu();
   } else {
     menuFx.stop();
+  }
+}
+
+function resetLobbyReady(): void {
+  localReady = false;
+  rivalReady = false;
+  updateLobbyReadyUI();
+}
+
+function updateLobbyReadyUI(): void {
+  const box = document.getElementById('lobbyReady');
+  const you = document.getElementById('readyYou');
+  const riv = document.getElementById('readyRival');
+  const btn = document.getElementById('readyBtn');
+  const hint = document.getElementById('lobbyHint');
+  if (!box) return;
+  const connected = !!room?.connected;
+  box.classList.toggle('hidden', !connected);
+  if (you) you.textContent = `Tú: ${localReady ? 'LISTO' : '…'}`;
+  if (riv) riv.textContent = `Rival: ${rivalReady ? 'LISTO' : '…'}`;
+  if (btn) {
+    btn.textContent = localReady ? 'Esperando…' : 'Listo';
+    btn.classList.toggle('btn-secondary', localReady);
+    btn.classList.toggle('btn-primary', !localReady);
+  }
+  if (hint) {
+    if (!connected) hint.textContent = 'Esperando conexión…';
+    else if (localReady && rivalReady) hint.textContent = '¡Arrancando!';
+    else if (localReady) hint.textContent = 'Esperando al rival…';
+    else if (rivalReady) hint.textContent = 'El rival está listo. ¡Pulsa Listo!';
+    else hint.textContent = 'Cuando estéis preparados, pulsad Listo.';
+  }
+}
+
+function tryHostStart(): void {
+  if (room?.role !== 'host' || versusStarted) return;
+  if (!localReady || !rivalReady) return;
+  if (!versusSeed) versusSeed = (Date.now() ^ 0x9e3779b9) >>> 0;
+  versusStarted = true;
+  room.send({ t: 'start', at: Date.now() + 300, seed: versusSeed });
+  void beginVersus(versusSeed);
+}
+
+function tryStartRematch(): void {
+  if (!iWantRematch || !rivalWantsRematch || versusStarted) return;
+  if (room?.role === 'host') {
+    const seed = (versusSeed + 17) >>> 0;
+    versusSeed = seed;
+    versusStarted = true;
+    iWantRematch = false;
+    rivalWantsRematch = false;
+    room.send({ t: 'start', at: Date.now() + 200, seed });
+    void beginVersus(seed);
   }
 }
 
@@ -137,44 +201,67 @@ function stopLoop(): void {
   engine = null;
 }
 
-function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
+function startEngine(gameMode: 'solo' | 'versus', seed: number, kind: SoloKind | null = null): void {
   stopLoop();
+  endingCinematic = false;
   goScreen('game');
   setVersusUI(gameMode === 'versus');
   mode = gameMode;
+  if (gameMode === 'solo' && kind) soloKind = kind;
 
   const canvas = boardCanvas();
   renderer = new Renderer(canvas, cellSize());
   applySettings(settings, false);
+  document.getElementById('koOverlay')?.classList.add('hidden');
+  document.getElementById('netBadge')?.classList.toggle('hidden', gameMode !== 'versus');
 
-  engine = new GameEngine(gameMode, seed, {
-    onMove: () => sfx.move(),
-    onRotate: () => sfx.rotate(),
-    onLock: () => {
-      sfx.place();
-      renderer?.triggerLockFlash();
+  engine = new GameEngine(
+    gameMode,
+    seed,
+    {
+      onMove: () => sfx.move(),
+      onRotate: () => sfx.rotate(),
+      onLock: () => {
+        sfx.place();
+        renderer?.triggerLockFlash();
+      },
+      onHardDrop: () => sfx.hardDrop(),
+      onHold: () => sfx.hold(),
+      onClear: (info) => {
+        const duckMs = info.tSpin !== 'none' ? 700 : 380 + info.count * 80;
+        const duckAmt = info.tSpin !== 'none' ? 0.18 : Math.max(0.22, 0.4 - info.count * 0.05);
+        music.duck(duckAmt, duckMs);
+        if (info.tSpin !== 'none') sfx.tSpin(info.tSpin === 'full');
+        else if (info.count > 0) sfx.line(info.count);
+        if (info.combo >= 1) {
+          sfx.combo(info.combo);
+          renderer?.triggerComboPulse(info.combo);
+          flashComboBurst(app, info.combo);
+        }
+        let label = info.label;
+        if (info.combo >= 1 && info.count > 0) {
+          label = `${info.label}  ·  COMBO ${info.combo}`;
+        }
+        if (info.count > 0) {
+          renderer?.triggerClear(info.lines, engine!.board, {
+            tSpin: info.tSpin !== 'none',
+            label,
+          });
+        } else if (info.label) {
+          renderer?.triggerBanner(info.label, true);
+        }
+      },
+      onPowerupGain: () => sfx.powerupGain(),
+      onLevel: (lv) => music.setIntensity(0.8 + lv * 0.12),
+      onGameOver: () => {
+        void handleLocalGameOver();
+      },
+      onWin: (reason) => {
+        void handleSoloWin(reason);
+      },
     },
-    onHardDrop: () => sfx.hardDrop(),
-    onHold: () => sfx.hold(),
-    onClear: (info) => {
-      if (info.tSpin !== 'none') sfx.tSpin(info.tSpin === 'full');
-      else if (info.count > 0) sfx.line(info.count);
-      if (info.count > 0) {
-        renderer?.triggerClear(info.lines, engine!.board, {
-          tSpin: info.tSpin !== 'none',
-          label: info.label,
-        });
-      } else if (info.label) {
-        renderer?.triggerBanner(info.label, true);
-      }
-    },
-    onTSpin: () => {
-      /* sound handled in onClear */
-    },
-    onPowerupGain: () => sfx.powerupGain(),
-    onLevel: (lv) => music.setIntensity(0.8 + lv * 0.12),
-    onGameOver: () => handleLocalGameOver(),
-  });
+    gameMode === 'solo' ? soloKind : null,
+  );
 
   input.attach(engine, (slot) => usePowerup(slot));
   input.setEnabled(false);
@@ -224,6 +311,8 @@ function loop(now: number): void {
   updateHud(app, snap, {
     rivalScore,
     effectLabels: activeEffectLabels(snap),
+    pingMs: mode === 'versus' ? pingRtt : null,
+    linkOk: mode === 'versus' ? linkOk : undefined,
   });
 
   if (mode === 'versus') {
@@ -239,6 +328,12 @@ function loop(now: number): void {
         level: engine.level,
         alive: !engine.gameOver,
       });
+    }
+    if (now - lastPingAt > 2000 && room?.connected) {
+      lastPingAt = now;
+      const n = ++pingSeq;
+      lastPingSent = { n, t: now };
+      room.send({ t: 'ping', n });
     }
   }
 
@@ -284,12 +379,58 @@ function usePowerup(slot: number): void {
   }
 }
 
-function handleLocalGameOver(): void {
-  sfx.ko();
+async function handleSoloWin(reason: 'sprint' | 'ultra'): Promise<void> {
+  if (endingCinematic) return;
+  endingCinematic = true;
+  gameRunning = false;
   input.setEnabled(false);
+  music.duck(0.2, 1200);
+  sfx.win();
+  renderer?.triggerKo(true);
+  const ko = document.getElementById('koOverlay');
+  const koText = document.getElementById('koText');
+  if (koText) koText.textContent = 'CLEAR';
+  ko?.classList.remove('hidden');
+  ko?.classList.add('ko-win');
+  await wait(1400);
+  ko?.classList.add('hidden');
+  ko?.classList.remove('ko-win');
+  const e = engine;
+  if (reason === 'sprint') {
+    endMatch(
+      '¡Sprint!',
+      `${modeLabel('sprint')} en ${formatTime(e?.elapsedMs ?? 0)} · ${e?.score ?? 0} pts`,
+    );
+  } else {
+    endMatch('¡Tiempo!', `Ultra · ${e?.score ?? 0} pts · ${e?.lines ?? 0} líneas`);
+  }
+}
+
+async function handleLocalGameOver(): Promise<void> {
+  if (endingCinematic || engine?.won) return;
+  endingCinematic = true;
+  gameRunning = false;
+  input.setEnabled(false);
+  music.duck(0.12, 1600);
+  sfx.ko();
+  renderer?.triggerKo(false);
+  const ko = document.getElementById('koOverlay');
+  const koText = document.getElementById('koText');
+  if (koText) koText.textContent = mode === 'versus' ? 'KO' : 'OUT';
+  ko?.classList.remove('hidden');
+  ko?.classList.add('ko-lose');
+  await wait(1500);
+  ko?.classList.add('hidden');
+  ko?.classList.remove('ko-lose');
+
   if (mode === 'versus') {
     room?.send({ t: 'gameOver', winner: 'rival' });
     endMatch('Derrota', 'Tu torre colapsó.');
+  } else if (soloKind === 'survival') {
+    endMatch(
+      'Survival',
+      `Aguantaste ${formatTime(engine?.elapsedMs ?? 0)} · ${engine?.score ?? 0} pts · ${engine?.lines ?? 0} líneas`,
+    );
   } else {
     endMatch('Game Over', `Puntos ${engine?.score ?? 0} · Líneas ${engine?.lines ?? 0}`);
   }
@@ -297,6 +438,9 @@ function handleLocalGameOver(): void {
 
 function endMatch(title: string, sub: string): void {
   gameRunning = false;
+  endingCinematic = false;
+  iWantRematch = false;
+  rivalWantsRematch = false;
   const t = document.getElementById('resultTitle');
   const s = document.getElementById('resultSub');
   if (t) t.textContent = title;
@@ -304,32 +448,58 @@ function endMatch(title: string, sub: string): void {
   goScreen('result');
 }
 
+async function cinematicVictory(): Promise<void> {
+  if (endingCinematic) return;
+  endingCinematic = true;
+  gameRunning = false;
+  input.setEnabled(false);
+  music.duck(0.15, 1600);
+  sfx.win();
+  renderer?.triggerKo(true);
+  const ko = document.getElementById('koOverlay');
+  const koText = document.getElementById('koText');
+  if (koText) koText.textContent = 'KO';
+  ko?.classList.remove('hidden');
+  ko?.classList.add('ko-win');
+  await wait(1500);
+  ko?.classList.add('hidden');
+  ko?.classList.remove('ko-win');
+  endMatch('¡Victoria!', 'El rival ha caído.');
+}
+
 function ensureRoom(): PeerRoom {
-  // Always fresh instance (avoids stale PeerJS/MQTT state after failed joins)
   void room?.destroy();
+  linkOk = false;
+  pingRtt = null;
+  resetLobbyReady();
   room = new PeerRoom({
     onStatus: (text) => {
       const el = document.getElementById('roomStatus');
       if (el) el.textContent = text;
     },
     onConnected: (role, code) => {
+      linkOk = true;
       document.getElementById('roomCodeDisplay')?.classList.remove('hidden');
       const val = document.getElementById('roomCodeValue');
       if (val) val.textContent = code;
+      resetLobbyReady();
       if (role === 'host') {
         versusSeed = (Date.now() ^ (Math.random() * 1e9)) >>> 0;
         room?.send({ t: 'hello', seed: versusSeed, name: 'host' });
-      } else {
-        room?.send({ t: 'ready' });
       }
+      updateLobbyReadyUI();
+      const el = document.getElementById('roomStatus');
+      if (el) el.textContent = 'Conectado — pulsa Listo cuando quieras';
     },
     onMessage: onNetMessage,
     onDisconnected: () => {
-      if (mode === 'versus' && gameRunning) {
+      linkOk = false;
+      if (mode === 'versus' && (gameRunning || endingCinematic)) {
         endMatch('Desconectado', 'El rival cerró la conexión.');
       }
       const el = document.getElementById('roomStatus');
       if (el) el.textContent = 'Desconectado';
+      resetLobbyReady();
     },
     onError: (err) => {
       const el = document.getElementById('roomStatus');
@@ -343,23 +513,19 @@ function onNetMessage(msg: NetMessage): void {
   switch (msg.t) {
     case 'hello':
       versusSeed = msg.seed;
-      room?.send({ t: 'ready' });
-      if (room?.role === 'host') {
-        // guest will ready; host starts
-      }
+      updateLobbyReadyUI();
       break;
     case 'ready':
-      if (room?.role === 'host' && !versusStarted) {
-        if (!versusSeed) versusSeed = (Date.now() ^ 0x9e3779b9) >>> 0;
-        versusStarted = true;
-        room.send({ t: 'start', at: Date.now() + 300, seed: versusSeed });
-        void beginVersus(versusSeed);
-      }
+      rivalReady = true;
+      updateLobbyReadyUI();
+      tryHostStart();
       break;
     case 'start':
       if (!versusStarted) {
         versusSeed = msg.seed;
         versusStarted = true;
+        iWantRematch = false;
+        rivalWantsRematch = false;
         void beginVersus(msg.seed);
       }
       break;
@@ -372,23 +538,32 @@ function onNetMessage(msg: NetMessage): void {
       const pid = msg.id as PowerupId;
       if (!(pid in POWERUPS) || POWERUPS[pid].kind !== 'debuff') return;
       sfx.powerupHit();
+      music.duck(0.35, 320);
       engine.receiveAttack(pid, { rows: msg.rows, hole: msg.hole });
       renderer?.triggerBanner(POWERUPS[pid].label.toUpperCase(), true);
       break;
     }
     case 'gameOver':
       if (msg.winner === 'rival') {
-        // opponent says they lost -> we win. But message says winner from their POV:
-        // they send winner:'rival' meaning the other player (us) won
-        endMatch('¡Victoria!', 'El rival ha caído.');
+        void cinematicVictory();
       } else {
-        endMatch('Derrota', 'El rival ganó.');
+        void handleLocalGameOver();
       }
       break;
     case 'rematch':
-      pendingRematch = true;
+      rivalWantsRematch = true;
       versusStarted = false;
-      void beginVersus((versusSeed + 1) >>> 0);
+      const sub = document.getElementById('resultSub');
+      if (sub && !iWantRematch) sub.textContent = 'El rival quiere rematch. Pulsa Otra vez.';
+      if (iWantRematch) tryStartRematch();
+      break;
+    case 'ping':
+      room?.send({ t: 'pong', n: msg.n });
+      break;
+    case 'pong':
+      if (lastPingSent && msg.n === lastPingSent.n) {
+        pingRtt = performance.now() - lastPingSent.t;
+      }
       break;
   }
 }
@@ -397,8 +572,8 @@ async function beginVersus(seed: number): Promise<void> {
   rivalBoard = null;
   rivalScore = 0;
   rivalBlind = false;
-  pendingRematch = false;
   versusStarted = true;
+  resetLobbyReady();
   unlockAudio();
   startEngine('versus', seed);
 }
@@ -442,9 +617,12 @@ async function joinRoom(): Promise<void> {
 
 function exitToMenu(): void {
   stopLoop();
+  endingCinematic = false;
   void room?.destroy();
   room = null;
+  linkOk = false;
   mode = 'menu';
+  resetLobbyReady();
   goScreen('menu');
 }
 
@@ -463,14 +641,23 @@ app.addEventListener('click', (e) => {
 
   const action = t.dataset.action;
   switch (action) {
-    case 'solo':
+    case 'open-solo':
       unlockAudio();
       sfx.ui();
-      startEngine('solo', Date.now());
+      goScreen('solo-modes');
       break;
+    case 'solo-mode': {
+      unlockAudio();
+      sfx.ui();
+      const m = (t.dataset.mode ?? 'marathon') as SoloKind;
+      soloKind = m;
+      startEngine('solo', Date.now(), m);
+      break;
+    }
     case 'versus':
       unlockAudio();
       sfx.ui();
+      resetLobbyReady();
       goScreen('versus-setup');
       break;
     case 'open-settings':
@@ -486,6 +673,14 @@ app.addEventListener('click', (e) => {
       break;
     case 'join-room':
       void joinRoom();
+      break;
+    case 'toggle-ready':
+      if (!room?.connected || localReady || versusStarted) break;
+      localReady = true;
+      room.send({ t: 'ready' });
+      updateLobbyReadyUI();
+      tryHostStart();
+      sfx.ui();
       break;
     case 'copy-code': {
       const code = document.getElementById('roomCodeValue')?.textContent ?? '';
@@ -515,16 +710,18 @@ app.addEventListener('click', (e) => {
     }
     case 'again':
       if (mode === 'versus' || room?.role) {
-        room?.send({ t: 'rematch' });
         versusStarted = false;
-        if (pendingRematch || room?.role === 'host') {
-          void beginVersus((versusSeed + 17) >>> 0);
-        } else {
-          const sub = document.getElementById('resultSub');
-          if (sub) sub.textContent = 'Esperando rematch…';
+        iWantRematch = true;
+        room?.send({ t: 'rematch' });
+        const sub = document.getElementById('resultSub');
+        if (sub) {
+          sub.textContent = rivalWantsRematch
+            ? 'Rematch…'
+            : 'Esperando al rival…';
         }
+        tryStartRematch();
       } else {
-        startEngine('solo', Date.now());
+        startEngine('solo', Date.now(), soloKind);
       }
       break;
   }

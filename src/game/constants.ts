@@ -25,6 +25,8 @@ export const SCORE_TABLE = {
   softDrop: 1,
   hardDrop: 2,
   combo: 50,
+  /** Extra multiplier per combo step after the first clear (0 → 1.0x, 1 → 1.25x…) */
+  comboMulStep: 0.25,
   debuffSoloBonus: 150,
   tSpinZero: 400,
   tSpinMiniZero: 100,
@@ -33,6 +35,11 @@ export const SCORE_TABLE = {
   tSpinDouble: 1200,
   tSpinTriple: 1600,
 } as const;
+
+/** Solo short-mode targets */
+export const SPRINT_LINES = 40;
+export const ULTRA_MS = 120_000;
+export const SURVIVAL_GARBAGE_MS = 12_000;
 
 export type TSpinKind = 'none' | 'mini' | 'full';
 

@@ -27,6 +27,9 @@ export class MusicSynth {
   private ending = false;
   private advancing = false;
   private watchTimer: number | null = null;
+  private duckUntil = 0;
+  private duckFactor = 1;
+  private duckTimer: number | null = null;
 
   unlock(): void {
     this.unlocked = true;
@@ -92,11 +95,26 @@ export class MusicSynth {
     return 112 + (this.intensity - 1) * 6;
   }
 
+  /** Temporarily lower bed under SFX (e.g. clear / T-Spin / KO) */
+  duck(factor = 0.28, ms = 450): void {
+    this.duckFactor = Math.max(0.05, Math.min(1, factor));
+    this.duckUntil = performance.now() + ms;
+    this.applyTargetVolume(0.06);
+    if (this.duckTimer !== null) clearTimeout(this.duckTimer);
+    this.duckTimer = window.setTimeout(() => {
+      this.duckFactor = 1;
+      this.duckUntil = 0;
+      this.applyTargetVolume(0.22);
+      this.duckTimer = null;
+    }, ms + 40);
+  }
+
   private targetVolume(): number {
     if (this.muted || this.bed === 'none') return 0;
+    const ducked = performance.now() < this.duckUntil ? this.duckFactor : 1;
     // Keep headroom; intensity nudges game bed a bit
     const base = this.bed === 'game' ? 0.55 + this.intensity * 0.06 : 0.52;
-    return Math.min(1, base * this.volume);
+    return Math.min(1, base * this.volume * ducked);
   }
 
   private applyTargetVolume(smoothS: number): void {

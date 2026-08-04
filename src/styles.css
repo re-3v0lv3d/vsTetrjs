@@ -390,6 +390,224 @@ body[data-screen='result'] .menu-fx {
   accent-color: var(--lime);
 }
 
+.modes-card {
+  width: min(520px, 100%);
+}
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.mode-card {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  padding: 0.9rem 0.85rem;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  min-height: 96px;
+  transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+
+.mode-card strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  color: var(--lime);
+  margin-bottom: 0.35rem;
+}
+
+.mode-card span {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.mode-card:hover {
+  border-color: var(--lime);
+  transform: translateY(-2px);
+  box-shadow: 0 0 20px rgba(184, 255, 60, 0.12);
+}
+
+.mode-card:active {
+  transform: scale(0.98);
+}
+
+@media (max-width: 520px) {
+  .mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lobby-ready {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.ready-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  margin-bottom: 0.75rem;
+  color: var(--muted);
+}
+
+.combo-meter {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.55rem 0.65rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'label mul'
+    'value value';
+  gap: 0.1rem 0.5rem;
+  opacity: 0.55;
+  transition: opacity 0.2s, border-color 0.2s, box-shadow 0.2s;
+  --combo-n: 0;
+}
+
+.combo-meter.hot {
+  opacity: 1;
+  border-color: rgba(184, 255, 60, 0.45);
+  box-shadow: 0 0 calc(8px + var(--combo-n) * 3px) rgba(184, 255, 60, 0.25);
+}
+
+.combo-meter.blazing {
+  border-color: rgba(255, 229, 102, 0.55);
+  box-shadow: 0 0 18px rgba(255, 159, 67, 0.35);
+}
+
+.combo-meter.combo-pop {
+  animation: comboPop 0.35s ease-out;
+}
+
+@keyframes comboPop {
+  0% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+.combo-label {
+  grid-area: label;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.combo-value {
+  grid-area: value;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: var(--lime);
+  line-height: 1;
+}
+
+.combo-mul {
+  grid-area: mul;
+  font-size: 0.75rem;
+  color: var(--coral);
+  align-self: center;
+}
+
+.combo-burst {
+  position: absolute;
+  left: 50%;
+  top: 28%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(1.4rem, 6vw, 2.2rem);
+  color: var(--lime);
+  text-shadow: 0 0 20px rgba(184, 255, 60, 0.55);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.combo-burst.burst-in {
+  animation: burstIn 0.7s ease-out both;
+}
+
+@keyframes burstIn {
+  0% { opacity: 0; transform: translate(-50%, -40%) scale(0.7); }
+  25% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  100% { opacity: 0; transform: translate(-50%, -60%) scale(1.25); }
+}
+
+.ko-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(7, 16, 24, 0.55);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.ko-text {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(3.5rem, 22vw, 5.5rem);
+  letter-spacing: 0.08em;
+  animation: koSlam 0.55s cubic-bezier(0.2, 1.4, 0.3, 1) both;
+}
+
+.ko-overlay.ko-win .ko-text {
+  color: var(--lime);
+  text-shadow: 0 0 40px rgba(184, 255, 60, 0.65);
+}
+
+.ko-overlay.ko-lose .ko-text {
+  color: var(--coral);
+  text-shadow: 0 0 40px rgba(255, 77, 109, 0.65);
+}
+
+@keyframes koSlam {
+  0% { transform: scale(2.4); opacity: 0; filter: blur(6px); }
+  55% { transform: scale(0.95); opacity: 1; filter: blur(0); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.net-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  min-height: 32px;
+  padding: 0 0.35rem;
+}
+
+.net-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 8px var(--lime);
+}
+
+.net-dot.offline {
+  background: var(--coral);
+  box-shadow: 0 0 8px var(--coral);
+}
+
+.net-badge.net-bad {
+  color: var(--coral);
+}
+
+.net-badge.net-ok {
+  color: var(--lime);
+}
+
+.mode-stat.hidden {
+  display: none;
+}
+
 .btn {
   border: none;
   cursor: pointer;

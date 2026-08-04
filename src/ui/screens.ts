@@ -1,4 +1,4 @@
-export type ScreenId = 'menu' | 'versus-setup' | 'settings' | 'game' | 'result';
+export type ScreenId = 'menu' | 'solo-modes' | 'versus-setup' | 'settings' | 'game' | 'result';
 
 export function renderAppShell(root: HTMLElement): void {
   root.innerHTML = `
@@ -19,12 +19,38 @@ export function renderAppShell(root: HTMLElement): void {
         </h1>
         <p class="tagline">Caída libre. Basura al rival. Ritmo que no perdona.</p>
         <div class="cta-row">
-          <button class="btn btn-primary btn-glow" data-action="solo">Jugar solo</button>
+          <button class="btn btn-primary btn-glow" data-action="open-solo">Un jugador</button>
           <button class="btn btn-secondary btn-glow-soft" data-action="versus">Versus online</button>
         </div>
         <div class="menu-links">
           <button class="btn-text" data-action="open-settings">Ajustes</button>
           <button class="btn-text" data-action="toggle-mute" id="menuMute">Sonido: ON</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-solo" class="screen screen-solo">
+      <div class="panel-card modes-card">
+        <button class="btn-back" data-action="back-menu">← Menú</button>
+        <h2>Un jugador</h2>
+        <p class="panel-sub">Elige ritmo: maratón o un modo corto.</p>
+        <div class="mode-grid">
+          <button class="mode-card" data-action="solo-mode" data-mode="marathon">
+            <strong>Normal</strong>
+            <span>Sin límite. Sube de nivel y sobrevive.</span>
+          </button>
+          <button class="mode-card" data-action="solo-mode" data-mode="sprint">
+            <strong>Sprint 40</strong>
+            <span>40 líneas lo más rápido posible.</span>
+          </button>
+          <button class="mode-card" data-action="solo-mode" data-mode="ultra">
+            <strong>Ultra 2 min</strong>
+            <span>Máxima puntuación en dos minutos.</span>
+          </button>
+          <button class="mode-card" data-action="solo-mode" data-mode="survival">
+            <strong>Survival</strong>
+            <span>Basura periódica. Aguanta.</span>
+          </button>
         </div>
       </div>
     </section>
@@ -72,7 +98,7 @@ export function renderAppShell(root: HTMLElement): void {
       <div class="panel-card">
         <button class="btn-back" data-action="back-menu">← Menú</button>
         <h2>Versus online</h2>
-        <p class="panel-sub">Crea una sala o únete con el código.</p>
+        <p class="panel-sub">Crea una sala o únete con el código. Ambos deben pulsar Listo.</p>
         <div class="versus-actions">
           <button class="btn btn-primary btn-block" data-action="create-room">Crear sala</button>
           <div class="join-row">
@@ -86,6 +112,14 @@ export function renderAppShell(root: HTMLElement): void {
           <strong id="roomCodeValue">----</strong>
           <button class="btn-text" data-action="copy-code">Copiar</button>
         </div>
+        <div class="lobby-ready hidden" id="lobbyReady">
+          <div class="ready-row">
+            <span id="readyYou">Tú: …</span>
+            <span id="readyRival">Rival: …</span>
+          </div>
+          <button class="btn btn-primary btn-block" data-action="toggle-ready" id="readyBtn">Listo</button>
+          <p class="hint" id="lobbyHint">Esperando conexión…</p>
+        </div>
       </div>
     </section>
 
@@ -94,6 +128,10 @@ export function renderAppShell(root: HTMLElement): void {
         <button class="btn-back" data-action="exit-game">← Salir</button>
         <div class="brand-mini">VSTETR.JS</div>
         <div class="game-top-actions">
+          <div class="net-badge hidden" id="netBadge" title="Latencia">
+            <span class="net-dot" id="netDot"></span>
+            <span id="netPing">—</span>
+          </div>
           <div class="ui-zoom mobile-only" aria-label="Tamaño de interfaz">
             <button type="button" class="zoom-btn" data-action="ui-zoom-out" aria-label="Más pequeño">−</button>
             <span class="zoom-label" id="uiZoomLabel">100%</span>
@@ -113,6 +151,12 @@ export function renderAppShell(root: HTMLElement): void {
             <div><span>PTS</span><strong data-score>0</strong></div>
             <div><span>LÍNEAS</span><strong data-lines>0</strong></div>
             <div><span>NIVEL</span><strong data-level>1</strong></div>
+            <div class="mode-stat hidden" id="modeStatRow"><span data-mode-label>MODO</span><strong data-mode-stat>—</strong></div>
+          </div>
+          <div class="combo-meter" id="comboMeter" aria-live="polite">
+            <span class="combo-label">COMBO</span>
+            <strong class="combo-value" data-combo>0</strong>
+            <span class="combo-mul" data-combo-mul>×1.0</span>
           </div>
           <div class="effects" data-effects></div>
         </aside>
@@ -120,6 +164,10 @@ export function renderAppShell(root: HTMLElement): void {
         <div class="board-wrap">
           <canvas id="board"></canvas>
           <div id="countdown" class="countdown hidden"></div>
+          <div id="koOverlay" class="ko-overlay hidden" aria-hidden="true">
+            <span class="ko-text" id="koText">KO</span>
+          </div>
+          <div id="comboBurst" class="combo-burst hidden" aria-hidden="true"></div>
         </div>
 
         <aside class="side side-right">
@@ -179,6 +227,7 @@ export function renderAppShell(root: HTMLElement): void {
 export function showScreen(id: ScreenId): void {
   const map: Record<ScreenId, string> = {
     menu: 'screen-menu',
+    'solo-modes': 'screen-solo',
     'versus-setup': 'screen-versus',
     settings: 'screen-settings',
     game: 'screen-game',

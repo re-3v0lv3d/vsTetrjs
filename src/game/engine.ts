@@ -8,10 +8,14 @@ import {
   POWERUP_EVERY_LINES,
   SCORE_TABLE,
   SOFT_DROP_MS,
+  SPRINT_LINES,
+  SURVIVAL_GARBAGE_MS,
   TOTAL_ROWS,
+  ULTRA_MS,
   type CellColor,
   type TSpinKind,
 } from './constants';
+import type { SoloKind } from './modes';
 import {
   addGarbage,
   boardLite,
@@ -41,6 +45,8 @@ export interface ClearInfo {
   count: number;
   tSpin: TSpinKind;
   label: string;
+  combo: number;
+  comboMul: number;
 }
 
 export interface EngineEvents {
@@ -48,6 +54,7 @@ export interface EngineEvents {
   onClear?: (info: ClearInfo) => void;
   onTSpin?: (kind: TSpinKind, lines: number) => void;
   onGameOver?: () => void;
+  onWin?: (reason: 'sprint' | 'ultra') => void;
   onPowerupGain?: (id: PowerupId) => void;
   onPowerupUse?: (id: PowerupId, target: 'self' | 'rival') => void;
   onEffect?: (id: PowerupId, active: boolean) => void;
@@ -69,13 +76,18 @@ export interface EngineSnapshot {
   lines: number;
   level: number;
   combo: number;
+  comboMul: number;
   slots: (PowerupId | null)[];
   effects: ActiveEffects;
   gameOver: boolean;
+  won: boolean;
   paused: boolean;
   ghostY: number;
   clearing: number[];
   shake: number;
+  elapsedMs: number;
+  remainMs: number | null;
+  soloKind: SoloKind | null;
 }
 
 export interface ActiveEffects {
@@ -102,6 +114,7 @@ function emptyEffects(): ActiveEffects {
 
 export class GameEngine {
   mode: GameMode;
+  soloKind: SoloKind | null;
   board: BoardGrid = createBoard();
   active: ActivePiece | null = null;
   hold: ActivePiece['id'] | null = null;
@@ -114,9 +127,11 @@ export class GameEngine {
   slots: (PowerupId | null)[] = [null, null, null];
   effects = emptyEffects();
   gameOver = false;
+  won = false;
   paused = false;
   clearing: number[] = [];
   shake = 0;
+  elapsedMs = 0;
   private bag: BagRandom;
   private dropAcc = 0;
   private lockAcc = 0;
@@ -128,18 +143,36 @@ export class GameEngine {
   private pendingGarbage = 0;
   private pendingGarbageHoles: number[] = [];
   private linesSincePowerup = 0;
+  private survivalAcc = 0;
+  private survivalWave = 0;
   /** Last player action that moved the piece */
   private lastAction: 'none' | 'move' | 'rotate' | 'drop' = 'none';
   /** True if last rotate used a non-zero wall kick */
   private lastRotateKicked = false;
   private lastKickIndex = 0;
 
-  constructor(mode: GameMode, seed: number, events: EngineEvents = {}) {
+  constructor(
+    mode: GameMode,
+    seed: number,
+    events: EngineEvents = {},
+    soloKind: SoloKind | null = null,
+  ) {
     this.mode = mode;
+    this.soloKind = mode === 'solo' ? soloKind ?? 'marathon' : null;
     this.bag = new BagRandom(seed);
     this.events = events;
     this.fillNext();
     this.spawn();
+  }
+
+  comboMultiplier(): number {
+    if (this.combo <= 0) return 1;
+    return 1 + this.combo * SCORE_TABLE.comboMulStep;
+  }
+
+  remainMs(): number | null {
+    if (this.soloKind !== 'ultra') return null;
+    return Math.max(0, ULTRA_MS - this.elapsedMs);
   }
 
   private fillNext(): void {
@@ -397,9 +430,23 @@ export class GameEngine {
         this.combo = -1;
       }
 
-      this.score += base * this.level + (n > 0 ? Math.max(0, this.combo) * SCORE_TABLE.combo : 0);
+      const mul = n > 0 ? this.comboMultiplier() : 1;
+      const comboBonus = n > 0 ? Math.max(0, this.combo) * SCORE_TABLE.combo : 0;
+      this.score += Math.floor(base * this.level * mul) + comboBonus;
       this.events.onScore?.(this.score);
-      this.events.onClear?.({ lines: cleared, count: n, tSpin, label });
+      this.events.onClear?.({
+        lines: cleared,
+        count: n,
+        tSpin,
+        label,
+        combo: Math.max(0, this.combo),
+        comboMul: mul,
+      });
+
+      if (n > 0 && this.soloKind === 'sprint' && this.lines >= SPRINT_LINES) {
+        this.finishWin('sprint');
+        return;
+      }
 
       if (n === 0) {
         this.applyPendingGarbage();
@@ -414,6 +461,14 @@ export class GameEngine {
     this.lastAction = 'none';
     this.lastRotateKicked = false;
     this.lastKickIndex = 0;
+  }
+
+  private finishWin(reason: 'sprint' | 'ultra'): void {
+    if (this.gameOver || this.won) return;
+    this.won = true;
+    this.gameOver = true;
+    this.active = null;
+    this.events.onWin?.(reason);
   }
 
   /**
@@ -550,13 +605,34 @@ export class GameEngine {
   update(dt: number): void {
     if (this.gameOver || this.paused) return;
 
+    this.elapsedMs += dt * 1000;
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 3);
+
+    if (this.soloKind === 'ultra' && this.elapsedMs >= ULTRA_MS) {
+      this.finishWin('ultra');
+      return;
+    }
+
+    if (this.soloKind === 'survival') {
+      this.survivalAcc += dt * 1000;
+      const interval = Math.max(5500, SURVIVAL_GARBAGE_MS - this.survivalWave * 400);
+      if (this.survivalAcc >= interval) {
+        this.survivalAcc = 0;
+        this.survivalWave++;
+        const rows = this.survivalWave % 5 === 0 ? 2 : 1;
+        this.receiveAttack('garbage', {
+          rows,
+          hole: Math.floor(Math.random() * COLS),
+        });
+      }
+    }
 
     if (this.clearTimer > 0) {
       this.clearTimer -= dt * 1000;
       if (this.clearTimer <= 0) {
         this.clearing = [];
         this.applyPendingGarbage();
+        if (this.gameOver) return;
         this.spawn();
       }
       return;
@@ -588,6 +664,7 @@ export class GameEngine {
 
   snapshot(): EngineSnapshot {
     const gy = this.active ? ghostY(this.board, this.active) : 0;
+    const combo = Math.max(0, this.combo);
     return {
       board: this.board,
       active: this.active,
@@ -597,14 +674,19 @@ export class GameEngine {
       score: this.score,
       lines: this.lines,
       level: this.level,
-      combo: Math.max(0, this.combo),
+      combo,
+      comboMul: this.comboMultiplier(),
       slots: this.slots.slice(0, MAX_POWERUP_SLOTS) as (PowerupId | null)[],
       effects: { ...this.effects },
       gameOver: this.gameOver,
+      won: this.won,
       paused: this.paused,
       ghostY: gy,
       clearing: this.clearing,
       shake: this.shake,
+      elapsedMs: this.elapsedMs,
+      remainMs: this.remainMs(),
+      soloKind: this.soloKind,
     };
   }
 
