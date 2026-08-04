@@ -13,14 +13,13 @@ export function renderAppShell(root: HTMLElement): void {
           <span class="orbit-ring orbit-ring-2"></span>
           <span class="orbit-spark"></span>
         </div>
-        <p class="eyebrow"><span class="eyebrow-line"></span>ARCADE REWORK<span class="eyebrow-line"></span></p>
         <h1 class="brand" data-text="VSTETR.JS">
           <span class="brand-glitch" data-text="VSTETR.JS">VSTETR.JS</span>
         </h1>
         <p class="tagline">Caída libre. Basura al rival. Ritmo que no perdona.</p>
         <div class="cta-row">
-          <button class="btn btn-primary btn-glow" data-action="open-solo">Un jugador</button>
-          <button class="btn btn-secondary btn-glow-soft" data-action="versus">Versus online</button>
+          <button type="button" class="btn btn-primary btn-glow" data-action="open-solo">Un jugador</button>
+          <button type="button" class="btn btn-secondary btn-glow-soft" data-action="versus">Versus online</button>
         </div>
         <div class="menu-links">
           <button class="btn-text" data-action="open-settings">Ajustes</button>

@@ -47,6 +47,8 @@ export interface ClearInfo {
   label: string;
   combo: number;
   comboMul: number;
+  /** Cells of the piece that just locked (board coords) */
+  lockCells: Coord[];
 }
 
 export interface EngineEvents {
@@ -396,6 +398,7 @@ export class GameEngine {
   private lock(): void {
     if (!this.active) return;
     const locked = { ...this.active };
+    const lockCells = cellsOf(locked);
     const tSpin = this.detectTSpin(locked);
 
     lockPiece(this.board, locked);
@@ -441,6 +444,7 @@ export class GameEngine {
         label,
         combo: Math.max(0, this.combo),
         comboMul: mul,
+        lockCells,
       });
 
       if (n > 0 && this.soloKind === 'sprint' && this.lines >= SPRINT_LINES) {

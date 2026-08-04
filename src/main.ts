@@ -100,12 +100,25 @@ function bumpUiScale(delta: number): void {
 
 function goScreen(id: ScreenId): void {
   showScreen(id);
-  if (id === 'menu' || id === 'solo-modes' || id === 'settings' || id === 'versus-setup') {
+  const menuish =
+    id === 'menu' || id === 'solo-modes' || id === 'settings' || id === 'versus-setup';
+  if (menuish) {
     menuFx.start();
+    music.unlock();
     music.playMenu();
   } else {
     menuFx.stop();
   }
+}
+
+function openSoloModes(): void {
+  unlockAudio();
+  sfx.ui();
+  goScreen('solo-modes');
+  // Ensure the solo screen is actually visible (defensive)
+  document.getElementById('screen-solo')?.classList.add('active');
+  document.getElementById('screen-menu')?.classList.remove('active');
+  document.body.dataset.screen = 'solo-modes';
 }
 
 function resetLobbyReady(): void {
@@ -246,6 +259,7 @@ function startEngine(gameMode: 'solo' | 'versus', seed: number, kind: SoloKind |
           renderer?.triggerClear(info.lines, engine!.board, {
             tSpin: info.tSpin !== 'none',
             label,
+            lockCells: info.lockCells,
           });
         } else if (info.label) {
           renderer?.triggerBanner(info.label, true);
@@ -641,10 +655,9 @@ app.addEventListener('click', (e) => {
 
   const action = t.dataset.action;
   switch (action) {
+    case 'solo':
     case 'open-solo':
-      unlockAudio();
-      sfx.ui();
-      goScreen('solo-modes');
+      openSoloModes();
       break;
     case 'solo-mode': {
       unlockAudio();
@@ -766,3 +779,20 @@ if (settingsForm) {
 
 applySettings(settings, false);
 goScreen('menu');
+
+// First user gesture unlocks audio + starts menu music (browsers block autoplay)
+const unlockOnce = () => {
+  unlockAudio();
+  const screen = document.body.dataset.screen;
+  if (
+    screen === 'menu' ||
+    screen === 'solo-modes' ||
+    screen === 'settings' ||
+    screen === 'versus-setup'
+  ) {
+    music.playMenu();
+  }
+  void music.ensurePlaying();
+};
+window.addEventListener('pointerdown', unlockOnce, { once: true, capture: true });
+window.addEventListener('keydown', unlockOnce, { once: true, capture: true });

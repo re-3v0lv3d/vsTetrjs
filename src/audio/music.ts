@@ -1,7 +1,7 @@
 export type MusicBed = 'menu' | 'game' | 'none';
 
-const FADE_IN_S = 1.6;
-const FADE_OUT_S = 2.2;
+const FADE_IN_S = 0.45;
+const FADE_OUT_S = 1.4;
 
 function asset(path: string): string {
   const base = import.meta.env.BASE_URL || './';
@@ -30,6 +30,35 @@ export class MusicSynth {
   private duckUntil = 0;
   private duckFactor = 1;
   private duckTimer: number | null = null;
+  private cache = new Map<string, HTMLAudioElement>();
+  private switching: Promise<void> | null = null;
+
+  constructor() {
+    this.preload(TRACKS.menu);
+    for (const u of TRACKS.game) this.preload(u);
+  }
+
+  private preload(url: string): void {
+    if (this.cache.has(url)) return;
+    const a = new Audio();
+    a.preload = 'auto';
+    a.src = url;
+    a.load();
+    this.cache.set(url, a);
+  }
+
+  private takeAudio(url: string): HTMLAudioElement {
+    const cached = this.cache.get(url);
+    if (cached) {
+      // Clone node keeps buffer warm in many browsers
+      const clone = cached.cloneNode(true) as HTMLAudioElement;
+      clone.preload = 'auto';
+      return clone;
+    }
+    const a = new Audio(url);
+    a.preload = 'auto';
+    return a;
+  }
 
   unlock(): void {
     this.unlocked = true;
@@ -60,7 +89,11 @@ export class MusicSynth {
 
   /** Resume after autoplay block or unmute */
   async ensurePlaying(): Promise<void> {
-    if (!this.unlocked || this.bed === 'none') return;
+    if (!this.unlocked) return;
+    if (this.bed === 'none') {
+      await this.switchBed('menu');
+      return;
+    }
     if (this.audio) {
       if (this.audio.paused) {
         try {
@@ -69,7 +102,7 @@ export class MusicSynth {
           return;
         }
       }
-      if (!this.ending) await this.fadeTo(this.targetVolume(), FADE_IN_S * 0.6);
+      if (!this.ending) void this.fadeTo(this.targetVolume(), FADE_IN_S);
       return;
     }
     await this.startCurrentTrack(true);
@@ -77,34 +110,33 @@ export class MusicSynth {
 
   setIntensity(level: number): void {
     this.intensity = Math.max(0.7, Math.min(2, level));
-    this.applyTargetVolume(0.2);
+    this.applyTargetVolume(0.15);
   }
 
   setVolume(v: number): void {
     this.volume = Math.max(0, Math.min(1, v));
-    this.applyTargetVolume(0.08);
+    this.applyTargetVolume(0.06);
   }
 
   setMuted(m: boolean): void {
     this.muted = m;
     if (!m) void this.ensurePlaying();
-    else this.applyTargetVolume(0.05);
+    else this.applyTargetVolume(0.04);
   }
 
   getBpm(): number {
     return 112 + (this.intensity - 1) * 6;
   }
 
-  /** Temporarily lower bed under SFX (e.g. clear / T-Spin / KO) */
   duck(factor = 0.28, ms = 450): void {
     this.duckFactor = Math.max(0.05, Math.min(1, factor));
     this.duckUntil = performance.now() + ms;
-    this.applyTargetVolume(0.06);
+    this.applyTargetVolume(0.05);
     if (this.duckTimer !== null) clearTimeout(this.duckTimer);
     this.duckTimer = window.setTimeout(() => {
       this.duckFactor = 1;
       this.duckUntil = 0;
-      this.applyTargetVolume(0.22);
+      this.applyTargetVolume(0.18);
       this.duckTimer = null;
     }, ms + 40);
   }
@@ -112,7 +144,6 @@ export class MusicSynth {
   private targetVolume(): number {
     if (this.muted || this.bed === 'none') return 0;
     const ducked = performance.now() < this.duckUntil ? this.duckFactor : 1;
-    // Keep headroom; intensity nudges game bed a bit
     const base = this.bed === 'game' ? 0.55 + this.intensity * 0.06 : 0.52;
     return Math.min(1, base * this.volume * ducked);
   }
@@ -123,11 +154,29 @@ export class MusicSynth {
   }
 
   private async switchBed(next: MusicBed): Promise<void> {
-    if (next === this.bed && this.audio && !this.audio.paused) return;
-    this.bed = next;
-    await this.tearDown(true);
-    if (next === 'none' || !this.unlocked) return;
-    await this.startCurrentTrack(true);
+    const run = async () => {
+      if (next === this.bed && this.audio && !this.audio.paused) {
+        void this.fadeTo(this.targetVolume(), 0.2);
+        return;
+      }
+      // Same bed but paused (autoplay blocked) → just resume
+      if (next === this.bed && this.audio && this.audio.paused && this.unlocked) {
+        try {
+          await this.audio.play();
+          void this.fadeTo(this.targetVolume(), FADE_IN_S);
+          this.armEndWatcher(this.audio);
+          return;
+        } catch {
+          /* fall through to recreate */
+        }
+      }
+      this.bed = next;
+      await this.tearDown(true);
+      if (next === 'none' || !this.unlocked) return;
+      await this.startCurrentTrack(true);
+    };
+    this.switching = (this.switching ?? Promise.resolve()).then(run, run);
+    await this.switching;
   }
 
   private currentUrl(): string | null {
@@ -140,26 +189,33 @@ export class MusicSynth {
     const url = this.currentUrl();
     if (!url) return;
 
-    const a = new Audio(url);
-    a.preload = 'auto';
+    const a = this.takeAudio(url);
     a.loop = false;
     a.volume = 0;
     this.audio = a;
     this.ending = false;
 
-    a.addEventListener('ended', () => {
-      void this.onTrackEnded();
-    });
+    a.addEventListener(
+      'ended',
+      () => {
+        void this.onTrackEnded();
+      },
+      { once: true },
+    );
 
     try {
       await a.play();
     } catch {
-      // Autoplay blocked until next gesture
       return;
     }
 
-    if (fadeIn) await this.fadeTo(this.targetVolume(), FADE_IN_S);
-    else a.volume = this.targetVolume();
+    // Audible immediately, then finish the short fade
+    if (fadeIn) {
+      a.volume = Math.min(0.2, this.targetVolume() * 0.35);
+      void this.fadeTo(this.targetVolume(), FADE_IN_S);
+    } else {
+      a.volume = this.targetVolume();
+    }
 
     this.armEndWatcher(a);
   }
@@ -175,11 +231,11 @@ export class MusicSynth {
       const left = a.duration - a.currentTime;
       if (left <= FADE_OUT_S + 0.05) {
         this.ending = true;
-        void this.fadeTo(0, Math.max(0.25, left)).then(() => {
+        void this.fadeTo(0, Math.max(0.2, left)).then(() => {
           if (this.audio === a) void this.onTrackEnded();
         });
       }
-    }, 120);
+    }, 100);
   }
 
   private async onTrackEnded(): Promise<void> {
@@ -207,13 +263,17 @@ export class MusicSynth {
     this.audio = null;
     if (!a) return;
     if (fadeOut && a.volume > 0.01 && !a.paused) {
-      this.audio = a; // fadeTo uses this.audio
-      await this.fadeTo(0, Math.min(FADE_OUT_S, 1.1));
+      this.audio = a;
+      await this.fadeTo(0, Math.min(0.55, FADE_OUT_S));
       this.audio = null;
     }
     a.pause();
     a.removeAttribute('src');
-    a.load();
+    try {
+      a.load();
+    } catch {
+      /* ignore */
+    }
   }
 
   private fadeTo(target: number, seconds: number): Promise<void> {
@@ -221,7 +281,7 @@ export class MusicSynth {
     if (!a) return Promise.resolve();
     const token = ++this.fadeToken;
     const from = a.volume;
-    const dur = Math.max(0.05, seconds) * 1000;
+    const dur = Math.max(0.04, seconds) * 1000;
     const t0 = performance.now();
 
     return new Promise((resolve) => {
@@ -231,7 +291,6 @@ export class MusicSynth {
           return;
         }
         const t = Math.min(1, (now - t0) / dur);
-        // smoothstep
         const e = t * t * (3 - 2 * t);
         a.volume = Math.max(0, Math.min(1, from + (target - from) * e));
         if (t < 1) requestAnimationFrame(step);

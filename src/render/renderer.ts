@@ -59,7 +59,16 @@ export class Renderer {
     return { color: '#FF4D6D', strength: 0.85, scale: 1.2 };
   }
 
-  triggerClear(lines: number[], board: BoardGrid, opts?: { tSpin?: boolean; label?: string }): void {
+  triggerClear(
+    lines: number[],
+    board: BoardGrid,
+    opts?: {
+      tSpin?: boolean;
+      label?: string;
+      /** Board cells of the piece that caused the clear */
+      lockCells?: [number, number][];
+    },
+  ): void {
     const n = lines.length;
     const style = this.linePulseStyle(n, opts?.tSpin);
     this.flash = opts?.tSpin ? 1.35 : 0.85 + n * 0.15;
@@ -72,21 +81,26 @@ export class Renderer {
     this.pulseColor = style.color;
     this.pulseScale = style.scale;
 
-    const midY =
-      lines.reduce((a, y) => a + (y - HIDDEN_ROWS + 0.5) * this.cell, 0) / Math.max(1, n);
-    const cx = (COLS / 2) * this.cell;
-    const ringCount = Math.min(3, 1 + Math.floor(n / 2));
-    for (let i = 0; i < ringCount; i++) {
-      this.particles.ring(cx, midY, style.color, 10 + i * 8 + n * 4);
+    // Ring only at the locking piece cell that sits on a cleared line (prefer lowest)
+    const lineSet = new Set(lines);
+    const onClear = (opts?.lockCells ?? []).filter(([, y]) => lineSet.has(y));
+    const impact =
+      onClear.sort((a, b) => b[1] - a[1] || a[0] - b[0])[0] ??
+      opts?.lockCells?.slice().sort((a, b) => b[1] - a[1])[0];
+    if (impact) {
+      const rx = (impact[0] + 0.5) * this.cell;
+      const ry = (impact[1] - HIDDEN_ROWS + 0.5) * this.cell;
+      this.particles.ring(rx, ry, style.color, 10 + n * 3);
       this.impactRings.push({
-        x: cx,
-        y: midY,
-        life: 0.55 + n * 0.08 + i * 0.08,
-        max: 0.55 + n * 0.08 + i * 0.08,
+        x: rx,
+        y: ry,
+        life: 0.55 + n * 0.08,
+        max: 0.55 + n * 0.08,
         color: style.color,
-        r: 14 + i * 10 + n * 6,
+        r: 12 + n * 4,
       });
     }
+
     const burstMul = this.particlesAmount;
     for (const y of lines) {
       for (let x = 0; x < COLS; x++) {
@@ -115,19 +129,13 @@ export class Renderer {
   }
 
   triggerLockFlash(): void {
-    // Mild cyan pulse on place; line clears override with a stronger colored pulse
+    // Soft flash only — expanding ring is reserved for line clears at lock cell
     if (this.impactPulse < 0.5) {
-      this.impactPulse = 0.55 * this.pulseAmount;
+      this.impactPulse = 0.4 * this.pulseAmount;
       this.pulseColor = '#3DE0FF';
       this.pulseScale = 1;
     }
-    this.lockBurst = 0.35 * this.pulseAmount;
-    if (this.particlesAmount > 0.05) {
-      const cx = (COLS / 2) * this.cell;
-      const cy = (ROWS * 0.55) * this.cell;
-      this.particles.sparkle(cx + (Math.random() - 0.5) * this.cell * 4, cy, '#3DE0FF');
-      this.particles.ring(cx, cy, '#3DE0FF', 8);
-    }
+    this.lockBurst = 0.28 * this.pulseAmount;
   }
 
   triggerKo(won: boolean): void {
