@@ -1,0 +1,92 @@
+export class Sfx {
+  private ctx: AudioContext | null = null;
+  muted = false;
+
+  private ac(): AudioContext {
+    if (!this.ctx) this.ctx = new AudioContext();
+    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    return this.ctx;
+  }
+
+  private beep(
+    freq: number,
+    dur: number,
+    type: OscillatorType = 'square',
+    gain = 0.08,
+    slide = 0,
+  ): void {
+    if (this.muted) return;
+    const ctx = this.ac();
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), ctx.currentTime + dur);
+    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + dur);
+  }
+
+  move(): void {
+    this.beep(180, 0.04, 'square', 0.04);
+  }
+
+  rotate(): void {
+    this.beep(320, 0.06, 'square', 0.05);
+  }
+
+  lock(): void {
+    this.beep(120, 0.08, 'triangle', 0.06, -40);
+  }
+
+  line(n: number): void {
+    if (n >= 4) {
+      this.beep(440, 0.12, 'sawtooth', 0.09);
+      setTimeout(() => this.beep(660, 0.14, 'sawtooth', 0.08), 60);
+      setTimeout(() => this.beep(880, 0.18, 'square', 0.07), 120);
+    } else {
+      this.beep(400 + n * 80, 0.1, 'square', 0.07);
+    }
+  }
+
+  hardDrop(): void {
+    this.beep(90, 0.1, 'triangle', 0.08, -50);
+  }
+
+  hold(): void {
+    this.beep(260, 0.07, 'sine', 0.05);
+  }
+
+  powerupGain(): void {
+    this.beep(520, 0.08, 'sine', 0.06);
+    setTimeout(() => this.beep(720, 0.1, 'sine', 0.05), 50);
+  }
+
+  powerupSend(): void {
+    this.beep(600, 0.08, 'sawtooth', 0.07, 200);
+  }
+
+  powerupHit(): void {
+    this.beep(140, 0.15, 'sawtooth', 0.1, -80);
+  }
+
+  ko(): void {
+    this.beep(200, 0.2, 'sawtooth', 0.1, -150);
+    setTimeout(() => this.beep(80, 0.35, 'triangle', 0.12, -40), 100);
+  }
+
+  ui(): void {
+    this.beep(480, 0.05, 'sine', 0.04);
+  }
+
+  countdown(): void {
+    this.beep(360, 0.1, 'square', 0.06);
+  }
+
+  go(): void {
+    this.beep(720, 0.2, 'square', 0.08);
+  }
+}

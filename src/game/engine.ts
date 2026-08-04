@@ -1,0 +1,477 @@
+import {
+  BASE_GRAVITY_MS,
+  COLS,
+  LINES_PER_LEVEL,
+  LOCK_DELAY_MS,
+  MAX_LOCK_RESETS,
+  MAX_POWERUP_SLOTS,
+  POWERUP_EVERY_LINES,
+  SCORE_TABLE,
+  SOFT_DROP_MS,
+  type CellColor,
+} from './constants';
+import {
+  addGarbage,
+  boardLite,
+  clearBottomRow,
+  clearLines,
+  collides,
+  createBoard,
+  ghostY,
+  lockPiece,
+  type BoardGrid,
+} from './board';
+import { BagRandom, cellsOf, KICKS, spawnPiece, type ActivePiece, type Coord } from './pieces';
+import { isSelfBuff, rollPowerup, type PowerupId } from './powerups';
+
+export type GameMode = 'solo' | 'versus';
+
+export interface EngineEvents {
+  onLock?: () => void;
+  onClear?: (lines: number[], count: number) => void;
+  onGameOver?: () => void;
+  onPowerupGain?: (id: PowerupId) => void;
+  onPowerupUse?: (id: PowerupId, target: 'self' | 'rival') => void;
+  onEffect?: (id: PowerupId, active: boolean) => void;
+  onScore?: (score: number) => void;
+  onLevel?: (level: number) => void;
+  onHold?: () => void;
+  onMove?: () => void;
+  onRotate?: () => void;
+  onHardDrop?: () => void;
+}
+
+export interface EngineSnapshot {
+  board: BoardGrid;
+  active: ActivePiece | null;
+  hold: ActivePiece['id'] | null;
+  canHold: boolean;
+  next: ActivePiece['id'][];
+  score: number;
+  lines: number;
+  level: number;
+  combo: number;
+  slots: (PowerupId | null)[];
+  effects: ActiveEffects;
+  gameOver: boolean;
+  paused: boolean;
+  ghostY: number;
+  clearing: number[];
+  shake: number;
+}
+
+export interface ActiveEffects {
+  blindUntil: number;
+  slowUntil: number;
+  speedUntil: number;
+  invertUntil: number;
+  stainUntil: number;
+  rushUntil: number;
+  stainSeed: number;
+}
+
+function emptyEffects(): ActiveEffects {
+  return {
+    blindUntil: 0,
+    slowUntil: 0,
+    speedUntil: 0,
+    invertUntil: 0,
+    stainUntil: 0,
+    rushUntil: 0,
+    stainSeed: 0,
+  };
+}
+
+export class GameEngine {
+  mode: GameMode;
+  board: BoardGrid = createBoard();
+  active: ActivePiece | null = null;
+  hold: ActivePiece['id'] | null = null;
+  canHold = true;
+  nextQueue: ActivePiece['id'][] = [];
+  score = 0;
+  lines = 0;
+  level = 1;
+  combo = -1;
+  slots: (PowerupId | null)[] = [null, null, null];
+  effects = emptyEffects();
+  gameOver = false;
+  paused = false;
+  clearing: number[] = [];
+  shake = 0;
+  private bag: BagRandom;
+  private dropAcc = 0;
+  private lockAcc = 0;
+  private lockResets = 0;
+  private lowestY = 0;
+  private clearTimer = 0;
+  private softDropping = false;
+  private events: EngineEvents;
+  private pendingGarbage = 0;
+  private linesSincePowerup = 0;
+
+  constructor(mode: GameMode, seed: number, events: EngineEvents = {}) {
+    this.mode = mode;
+    this.bag = new BagRandom(seed);
+    this.events = events;
+    this.fillNext();
+    this.spawn();
+  }
+
+  private fillNext(): void {
+    while (this.nextQueue.length < 5) this.nextQueue.push(this.bag.next());
+  }
+
+  private spawn(): void {
+    this.fillNext();
+    const id = this.nextQueue.shift()!;
+    this.active = spawnPiece(id);
+    this.canHold = true;
+    this.resetLockState();
+    if (collides(this.board, this.active)) {
+      this.gameOver = true;
+      this.events.onGameOver?.();
+    }
+  }
+
+  private resetLockState(): void {
+    this.lockAcc = 0;
+    this.lockResets = 0;
+    this.lowestY = this.active?.y ?? 0;
+  }
+
+  gravityMs(): number {
+    if (this.softDropping) return SOFT_DROP_MS;
+    const now = performance.now();
+    let g = Math.max(80, BASE_GRAVITY_MS - (this.level - 1) * 70);
+    if (now < this.effects.slowUntil) g *= 2.2;
+    if (now < this.effects.speedUntil) g *= 0.35;
+    // Forced haste from rival — very fast, hard to control
+    if (now < this.effects.rushUntil) g *= 0.32;
+    return Math.max(45, g);
+  }
+
+  setSoftDrop(on: boolean): void {
+    if (on && !this.softDropping) this.dropAcc = 0;
+    this.softDropping = on;
+  }
+
+  togglePause(): void {
+    if (this.mode !== 'solo' || this.gameOver) return;
+    this.paused = !this.paused;
+  }
+
+  private inverted(): boolean {
+    return performance.now() < this.effects.invertUntil;
+  }
+
+  move(dx: number): boolean {
+    if (!this.active || this.paused || this.gameOver || this.clearTimer > 0) return false;
+    if (this.inverted()) dx = -dx;
+    const next = { ...this.active, x: this.active.x + dx };
+    if (!collides(this.board, next)) {
+      this.active = next;
+      this.resetLock();
+      this.events.onMove?.();
+      return true;
+    }
+    return false;
+  }
+
+  rotate(dir: 1 | -1): boolean {
+    if (!this.active || this.paused || this.gameOver || this.clearTimer > 0) return false;
+    if (this.inverted()) dir = dir === 1 ? -1 : 1;
+    const from = this.active.rot;
+    const to = (from + dir + 4) % 4;
+    for (const [kx, ky] of KICKS) {
+      const next = { ...this.active, rot: to, x: this.active.x + kx, y: this.active.y + ky };
+      if (!collides(this.board, next)) {
+        this.active = next;
+        this.resetLock();
+        this.events.onRotate?.();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  hardDrop(): void {
+    if (!this.active || this.paused || this.gameOver || this.clearTimer > 0) return;
+    let dist = 0;
+    while (!collides(this.board, { ...this.active, y: this.active.y + 1 })) {
+      this.active.y++;
+      dist++;
+    }
+    this.score += dist * SCORE_TABLE.hardDrop;
+    this.events.onHardDrop?.();
+    this.lock();
+  }
+
+  holdPiece(): void {
+    if (!this.active || !this.canHold || this.paused || this.gameOver || this.clearTimer > 0) return;
+    const current = this.active.id;
+    if (this.hold) {
+      this.active = spawnPiece(this.hold);
+    } else {
+      this.fillNext();
+      this.active = spawnPiece(this.nextQueue.shift()!);
+    }
+    this.hold = current;
+    this.canHold = false;
+    this.resetLockState();
+    this.events.onHold?.();
+    if (collides(this.board, this.active)) {
+      this.gameOver = true;
+      this.events.onGameOver?.();
+    }
+  }
+
+  /** Reset lock delay on move/rotate, but only a limited number of times while grounded */
+  private resetLock(): void {
+    if (!this.active) return;
+    if (this.active.y > this.lowestY) {
+      this.lowestY = this.active.y;
+      this.lockResets = 0;
+    }
+    const grounded = collides(this.board, { ...this.active, y: this.active.y + 1 });
+    if (!grounded) {
+      this.lockAcc = 0;
+      return;
+    }
+    if (this.lockResets >= MAX_LOCK_RESETS) return;
+    this.lockResets++;
+    this.lockAcc = 0;
+  }
+
+  private lock(): void {
+    if (!this.active) return;
+    lockPiece(this.board, this.active);
+    this.active = null;
+    this.events.onLock?.();
+    this.shake = Math.max(this.shake, 0.3);
+
+    const cleared = clearLines(this.board);
+    if (cleared.length > 0) {
+      this.clearing = cleared;
+      this.clearTimer = 220;
+      this.combo++;
+      const n = cleared.length;
+      const base =
+        n === 1 ? SCORE_TABLE.single :
+        n === 2 ? SCORE_TABLE.double :
+        n === 3 ? SCORE_TABLE.triple :
+        SCORE_TABLE.tetris;
+      this.score += base * this.level + Math.max(0, this.combo) * SCORE_TABLE.combo;
+      this.lines += n;
+      const newLevel = Math.floor(this.lines / LINES_PER_LEVEL) + 1;
+      if (newLevel !== this.level) {
+        this.level = newLevel;
+        this.events.onLevel?.(this.level);
+      }
+      this.events.onClear?.(cleared, n);
+      this.events.onScore?.(this.score);
+      this.awardPowerups(n);
+      this.shake = 1;
+    } else {
+      this.combo = -1;
+      this.applyPendingGarbage();
+      this.spawn();
+    }
+  }
+
+  /**
+   * Powerups:
+   * - Double / triple → 1
+   * - Tetris (4+) → 2
+   * - Además, cada POWERUP_EVERY_LINES líneas totales → 1 extra
+   */
+  private awardPowerups(clearedCount: number): void {
+    let grants = 0;
+    if (clearedCount >= 4) grants += 2;
+    else if (clearedCount >= 2) grants += 1;
+
+    this.linesSincePowerup += clearedCount;
+    while (this.linesSincePowerup >= POWERUP_EVERY_LINES) {
+      this.linesSincePowerup -= POWERUP_EVERY_LINES;
+      grants += 1;
+    }
+
+    for (let i = 0; i < grants; i++) this.grantPowerup();
+  }
+
+  private grantPowerup(): void {
+    const idx = this.slots.findIndex((s) => s === null);
+    if (idx === -1) return;
+    const id = rollPowerup(this.mode === 'versus');
+    this.slots[idx] = id;
+    this.events.onPowerupGain?.(id);
+  }
+
+  useSlot(index: number): PowerupId | null {
+    if (this.paused || this.gameOver) return null;
+    const id = this.slots[index];
+    if (!id) return null;
+    this.slots[index] = null;
+
+    if (isSelfBuff(id)) {
+      this.applySelf(id);
+      this.events.onPowerupUse?.(id, 'self');
+      return id;
+    }
+
+    if (this.mode === 'solo') {
+      this.score += SCORE_TABLE.debuffSoloBonus * this.level;
+      this.events.onScore?.(this.score);
+      this.events.onPowerupUse?.(id, 'self');
+      return id;
+    }
+
+    this.events.onPowerupUse?.(id, 'rival');
+    return id;
+  }
+
+  private applySelf(id: PowerupId): void {
+    const now = performance.now();
+    if (id === 'speed') {
+      this.effects.speedUntil = now + 6000;
+      this.events.onEffect?.(id, true);
+    } else if (id === 'clear') {
+      if (clearBottomRow(this.board)) {
+        this.score += 50 * this.level;
+        this.events.onScore?.(this.score);
+      }
+    }
+  }
+
+  /** Incoming attack from rival */
+  receiveAttack(id: PowerupId, meta?: { rows?: number; hole?: number }): void {
+    const now = performance.now();
+    if (id === 'garbage') {
+      const rows = meta?.rows ?? 2;
+      this.pendingGarbage += rows;
+      this.shake = 1.2;
+    } else if (id === 'blind') {
+      this.effects.blindUntil = now + 4000;
+      this.events.onEffect?.(id, true);
+      this.shake = 0.8;
+    } else if (id === 'slow') {
+      this.effects.slowUntil = now + 5000;
+      this.events.onEffect?.(id, true);
+    } else if (id === 'lock') {
+      this.effects.invertUntil = now + 5000;
+      this.events.onEffect?.(id, true);
+      this.shake = 0.6;
+    } else if (id === 'stain') {
+      this.effects.stainUntil = now + 6000;
+      this.effects.stainSeed = (Math.random() * 1e9) >>> 0;
+      this.events.onEffect?.(id, true);
+      this.shake = 0.5;
+    } else if (id === 'rush') {
+      this.effects.rushUntil = now + 6000;
+      this.events.onEffect?.(id, true);
+      this.shake = 0.7;
+    }
+  }
+
+  private applyPendingGarbage(): void {
+    while (this.pendingGarbage > 0) {
+      const hole = Math.floor(Math.random() * COLS);
+      const ok = addGarbage(this.board, 1, hole);
+      this.pendingGarbage--;
+      if (!ok) {
+        this.gameOver = true;
+        this.events.onGameOver?.();
+        return;
+      }
+    }
+  }
+
+  softStep(): void {
+    if (!this.active || this.paused || this.gameOver || this.clearTimer > 0) return;
+    if (!collides(this.board, { ...this.active, y: this.active.y + 1 })) {
+      this.active.y++;
+      if (this.softDropping) {
+        this.score += SCORE_TABLE.softDrop;
+        this.events.onScore?.(this.score);
+      }
+      this.lockAcc = 0;
+      // New lowest row → allow fresh lock resets (Guideline)
+      if (this.active.y > this.lowestY) {
+        this.lowestY = this.active.y;
+        this.lockResets = 0;
+      }
+    }
+  }
+
+  update(dt: number): void {
+    if (this.gameOver || this.paused) return;
+
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 3);
+
+    if (this.clearTimer > 0) {
+      this.clearTimer -= dt * 1000;
+      if (this.clearTimer <= 0) {
+        this.clearing = [];
+        this.applyPendingGarbage();
+        this.spawn();
+      }
+      return;
+    }
+
+    if (!this.active) return;
+
+    this.dropAcc += dt * 1000;
+    const g = this.gravityMs();
+    // Soft drop: max 1 cell/frame so lag never teleports the piece
+    const maxSteps = this.softDropping ? 1 : 4;
+    let steps = 0;
+    while (this.dropAcc >= g && steps < maxSteps) {
+      this.dropAcc -= g;
+      this.softStep();
+      steps++;
+      if (!this.active || this.clearTimer > 0) return;
+    }
+    if (steps >= maxSteps) this.dropAcc = Math.min(this.dropAcc, g);
+
+    const grounded = collides(this.board, { ...this.active, y: this.active.y + 1 });
+    if (grounded) {
+      this.lockAcc += dt * 1000;
+      if (this.lockAcc >= LOCK_DELAY_MS) this.lock();
+    } else {
+      this.lockAcc = 0;
+    }
+  }
+
+  snapshot(): EngineSnapshot {
+    const gy = this.active ? ghostY(this.board, this.active) : 0;
+    return {
+      board: this.board,
+      active: this.active,
+      hold: this.hold,
+      canHold: this.canHold,
+      next: this.nextQueue.slice(0, 3),
+      score: this.score,
+      lines: this.lines,
+      level: this.level,
+      combo: Math.max(0, this.combo),
+      slots: this.slots.slice(0, MAX_POWERUP_SLOTS) as (PowerupId | null)[],
+      effects: { ...this.effects },
+      gameOver: this.gameOver,
+      paused: this.paused,
+      ghostY: gy,
+      clearing: this.clearing,
+      shake: this.shake,
+    };
+  }
+
+  liteBoard(): number[] {
+    return boardLite(this.board);
+  }
+
+  activeCells(): Coord[] {
+    if (!this.active) return [];
+    return cellsOf(this.active);
+  }
+}
+
+export type { BoardGrid, CellColor, ActivePiece };
