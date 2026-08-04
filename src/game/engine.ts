@@ -8,7 +8,9 @@ import {
   POWERUP_EVERY_LINES,
   SCORE_TABLE,
   SOFT_DROP_MS,
+  TOTAL_ROWS,
   type CellColor,
+  type TSpinKind,
 } from './constants';
 import {
   addGarbage,
@@ -21,14 +23,30 @@ import {
   lockPiece,
   type BoardGrid,
 } from './board';
-import { BagRandom, cellsOf, KICKS, spawnPiece, type ActivePiece, type Coord } from './pieces';
+import {
+  BagRandom,
+  cellsOf,
+  kicksFor,
+  spawnPiece,
+  tCenter,
+  type ActivePiece,
+  type Coord,
+} from './pieces';
 import { isSelfBuff, rollPowerup, type PowerupId } from './powerups';
 
 export type GameMode = 'solo' | 'versus';
 
+export interface ClearInfo {
+  lines: number[];
+  count: number;
+  tSpin: TSpinKind;
+  label: string;
+}
+
 export interface EngineEvents {
   onLock?: () => void;
-  onClear?: (lines: number[], count: number) => void;
+  onClear?: (info: ClearInfo) => void;
+  onTSpin?: (kind: TSpinKind, lines: number) => void;
   onGameOver?: () => void;
   onPowerupGain?: (id: PowerupId) => void;
   onPowerupUse?: (id: PowerupId, target: 'self' | 'rival') => void;
@@ -109,6 +127,11 @@ export class GameEngine {
   private events: EngineEvents;
   private pendingGarbage = 0;
   private linesSincePowerup = 0;
+  /** Last player action that moved the piece */
+  private lastAction: 'none' | 'move' | 'rotate' | 'drop' = 'none';
+  /** True if last rotate used a non-zero wall kick */
+  private lastRotateKicked = false;
+  private lastKickIndex = 0;
 
   constructor(mode: GameMode, seed: number, events: EngineEvents = {}) {
     this.mode = mode;
@@ -171,6 +194,7 @@ export class GameEngine {
     const next = { ...this.active, x: this.active.x + dx };
     if (!collides(this.board, next)) {
       this.active = next;
+      this.lastAction = 'move';
       this.resetLock();
       this.events.onMove?.();
       return true;
@@ -183,10 +207,15 @@ export class GameEngine {
     if (this.inverted()) dir = dir === 1 ? -1 : 1;
     const from = this.active.rot;
     const to = (from + dir + 4) % 4;
-    for (const [kx, ky] of KICKS) {
+    const tests = kicksFor(this.active.id, from, to);
+    for (let i = 0; i < tests.length; i++) {
+      const [kx, ky] = tests[i]!;
       const next = { ...this.active, rot: to, x: this.active.x + kx, y: this.active.y + ky };
       if (!collides(this.board, next)) {
         this.active = next;
+        this.lastAction = 'rotate';
+        this.lastRotateKicked = kx !== 0 || ky !== 0;
+        this.lastKickIndex = i;
         this.resetLock();
         this.events.onRotate?.();
         return true;
@@ -203,6 +232,7 @@ export class GameEngine {
       dist++;
     }
     this.score += dist * SCORE_TABLE.hardDrop;
+    if (dist > 0) this.lastAction = 'drop';
     this.events.onHardDrop?.();
     this.lock();
   }
@@ -243,40 +273,146 @@ export class GameEngine {
     this.lockAcc = 0;
   }
 
+  private cellBlocked(x: number, y: number): boolean {
+    if (x < 0 || x >= COLS || y >= TOTAL_ROWS) return true;
+    if (y < 0) return false;
+    return this.board[y][x] !== 0;
+  }
+
+  /**
+   * Guideline-style T-Spin check (corners around T center).
+   * Must run BEFORE locking the piece into the board.
+   */
+  private detectTSpin(piece: ActivePiece): TSpinKind {
+    if (piece.id !== 'T' || this.lastAction !== 'rotate') return 'none';
+
+    const [cx, cy] = tCenter(piece);
+    const corners: Coord[] = [
+      [cx - 1, cy - 1], // TL
+      [cx + 1, cy - 1], // TR
+      [cx - 1, cy + 1], // BL
+      [cx + 1, cy + 1], // BR
+    ];
+    const filled = corners.map(([x, y]) => this.cellBlocked(x, y));
+    const filledCount = filled.filter(Boolean).length;
+
+    // Front corners depend on facing
+    const frontIdx: Record<number, [number, number]> = {
+      0: [0, 1], // point up → TL, TR
+      1: [1, 3], // point right → TR, BR
+      2: [2, 3], // point down → BL, BR
+      3: [0, 2], // point left → TL, BL
+    };
+    const [f0, f1] = frontIdx[piece.rot] ?? [0, 1];
+    const frontFilled = (filled[f0] ? 1 : 0) + (filled[f1] ? 1 : 0);
+
+    if (filledCount >= 3 && frontFilled === 2) return 'full';
+    if (filledCount >= 3) {
+      // 3 corners but not both fronts → Mini (or Full if 5th kick / TST-ish)
+      return this.lastKickIndex >= 4 ? 'mini' : 'full';
+    }
+    // Mini: rotated into a tight slot (kick) with 2 corners
+    if (filledCount >= 2 && this.lastRotateKicked) return 'mini';
+
+    // Immobile T after rotate also counts as mini
+    const immobile =
+      collides(this.board, { ...piece, x: piece.x - 1 }) &&
+      collides(this.board, { ...piece, x: piece.x + 1 }) &&
+      collides(this.board, { ...piece, y: piece.y - 1 });
+    if (immobile && filledCount >= 2) return 'mini';
+
+    return 'none';
+  }
+
+  private tSpinScore(kind: TSpinKind, lines: number): number {
+    if (kind === 'none') {
+      if (lines === 1) return SCORE_TABLE.single;
+      if (lines === 2) return SCORE_TABLE.double;
+      if (lines === 3) return SCORE_TABLE.triple;
+      if (lines >= 4) return SCORE_TABLE.tetris;
+      return 0;
+    }
+    if (kind === 'mini') {
+      if (lines === 0) return SCORE_TABLE.tSpinMiniZero;
+      if (lines === 1) return SCORE_TABLE.tSpinMiniSingle;
+      // Mini double treated as full TSD-ish
+      if (lines === 2) return SCORE_TABLE.tSpinDouble;
+    }
+    if (lines === 0) return SCORE_TABLE.tSpinZero;
+    if (lines === 1) return SCORE_TABLE.tSpinSingle;
+    if (lines === 2) return SCORE_TABLE.tSpinDouble;
+    return SCORE_TABLE.tSpinTriple;
+  }
+
+  private tSpinLabel(kind: TSpinKind, lines: number): string {
+    if (kind === 'none') {
+      if (lines >= 4) return 'TETRIS';
+      if (lines === 3) return 'TRIPLE';
+      if (lines === 2) return 'DOUBLE';
+      if (lines === 1) return 'SINGLE';
+      return '';
+    }
+    const prefix = kind === 'mini' ? 'T-SPIN MINI' : 'T-SPIN';
+    if (lines === 0) return prefix;
+    if (lines === 1) return `${prefix} SINGLE`;
+    if (lines === 2) return `${prefix} DOUBLE`;
+    return `${prefix} TRIPLE`;
+  }
+
   private lock(): void {
     if (!this.active) return;
-    lockPiece(this.board, this.active);
+    const locked = { ...this.active };
+    const tSpin = this.detectTSpin(locked);
+
+    lockPiece(this.board, locked);
     this.active = null;
     this.events.onLock?.();
-    this.shake = Math.max(this.shake, 0.3);
+    this.shake = Math.max(this.shake, tSpin !== 'none' ? 1.1 : 0.3);
 
     const cleared = clearLines(this.board);
-    if (cleared.length > 0) {
-      this.clearing = cleared;
-      this.clearTimer = 220;
-      this.combo++;
-      const n = cleared.length;
-      const base =
-        n === 1 ? SCORE_TABLE.single :
-        n === 2 ? SCORE_TABLE.double :
-        n === 3 ? SCORE_TABLE.triple :
-        SCORE_TABLE.tetris;
-      this.score += base * this.level + Math.max(0, this.combo) * SCORE_TABLE.combo;
-      this.lines += n;
-      const newLevel = Math.floor(this.lines / LINES_PER_LEVEL) + 1;
-      if (newLevel !== this.level) {
-        this.level = newLevel;
-        this.events.onLevel?.(this.level);
+    const n = cleared.length;
+    const base = this.tSpinScore(tSpin, n);
+    const label = this.tSpinLabel(tSpin, n);
+
+    if (tSpin !== 'none') {
+      this.events.onTSpin?.(tSpin, n);
+    }
+
+    if (n > 0 || tSpin !== 'none') {
+      if (n > 0) {
+        this.clearing = cleared;
+        this.clearTimer = tSpin !== 'none' ? 280 : 220;
+        this.combo++;
+        this.lines += n;
+        const newLevel = Math.floor(this.lines / LINES_PER_LEVEL) + 1;
+        if (newLevel !== this.level) {
+          this.level = newLevel;
+          this.events.onLevel?.(this.level);
+        }
+        this.awardPowerups(n + (tSpin === 'full' && n >= 2 ? 1 : 0));
+        this.shake = tSpin !== 'none' ? 1.4 : 1;
+      } else {
+        // T-Spin no lines — still awards points, then continue
+        this.combo = -1;
       }
-      this.events.onClear?.(cleared, n);
+
+      this.score += base * this.level + (n > 0 ? Math.max(0, this.combo) * SCORE_TABLE.combo : 0);
       this.events.onScore?.(this.score);
-      this.awardPowerups(n);
-      this.shake = 1;
+      this.events.onClear?.({ lines: cleared, count: n, tSpin, label });
+
+      if (n === 0) {
+        this.applyPendingGarbage();
+        this.spawn();
+      }
     } else {
       this.combo = -1;
       this.applyPendingGarbage();
       this.spawn();
     }
+
+    this.lastAction = 'none';
+    this.lastRotateKicked = false;
+    this.lastKickIndex = 0;
   }
 
   /**
@@ -390,7 +526,9 @@ export class GameEngine {
     if (!this.active || this.paused || this.gameOver || this.clearTimer > 0) return;
     if (!collides(this.board, { ...this.active, y: this.active.y + 1 })) {
       this.active.y++;
+      // Player soft-drop cancels T-Spin; natural gravity does not
       if (this.softDropping) {
+        this.lastAction = 'drop';
         this.score += SCORE_TABLE.softDrop;
         this.events.onScore?.(this.score);
       }

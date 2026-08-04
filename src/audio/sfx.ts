@@ -52,6 +52,18 @@ export class Sfx {
     }
   }
 
+  tSpin(full: boolean): void {
+    if (full) {
+      this.beep(300, 0.08, 'sawtooth', 0.09);
+      setTimeout(() => this.beep(450, 0.1, 'square', 0.1), 50);
+      setTimeout(() => this.beep(600, 0.12, 'triangle', 0.1), 100);
+      setTimeout(() => this.beep(900, 0.18, 'square', 0.08), 160);
+    } else {
+      this.beep(360, 0.08, 'triangle', 0.08);
+      setTimeout(() => this.beep(540, 0.12, 'square', 0.09), 70);
+    }
+  }
+
   hardDrop(): void {
     this.beep(90, 0.1, 'triangle', 0.08, -50);
   }

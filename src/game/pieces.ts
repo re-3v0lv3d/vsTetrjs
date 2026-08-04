@@ -48,7 +48,70 @@ export const SHAPES: Record<PieceId, Coord[][]> = {
   ],
 };
 
-/** Minimal kick table (SRS-lite) */
+/**
+ * SRS wall-kick offsets. Guideline uses +Y up; we use +Y down → negate Y.
+ * Indexed as fromRot * 4 + toRot for JLSTZ / I.
+ */
+function negY(table: Coord[][]): Coord[][] {
+  return table.map((row) => row.map(([x, y]) => [x, -y] as Coord));
+}
+
+/** JLSTZ kicks (including T) — SRS */
+const JLSTZ_RAW: Coord[][] = [
+  // 0>>1
+  [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+  // 1>>0
+  [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+  // 1>>2
+  [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+  // 2>>1
+  [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+  // 2>>3
+  [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
+  // 3>>2
+  [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+  // 3>>0
+  [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+  // 0>>3
+  [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
+];
+
+const I_RAW: Coord[][] = [
+  [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+  [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+  [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]],
+  [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+  [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+  [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+  [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+  [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]],
+];
+
+const JLSTZ_KICKS = negY(JLSTZ_RAW);
+const I_KICKS = negY(I_RAW);
+
+function kickIndex(from: number, to: number): number {
+  const map: Record<string, number> = {
+    '0,1': 0,
+    '1,0': 1,
+    '1,2': 2,
+    '2,1': 3,
+    '2,3': 4,
+    '3,2': 5,
+    '3,0': 6,
+    '0,3': 7,
+  };
+  return map[`${from},${to}`] ?? 0;
+}
+
+export function kicksFor(id: PieceId, from: number, to: number): Coord[] {
+  if (id === 'O') return [[0, 0]];
+  const idx = kickIndex(from, to);
+  if (id === 'I') return I_KICKS[idx] ?? [[0, 0]];
+  return JLSTZ_KICKS[idx] ?? [[0, 0]];
+}
+
+/** Fallback simple kicks (unused by engine if SRS tables work) */
 export const KICKS: Coord[] = [
   [0, 0],
   [-1, 0],
@@ -72,6 +135,11 @@ export interface ActivePiece {
 
 export function cellsOf(piece: ActivePiece): Coord[] {
   return SHAPES[piece.id][piece.rot].map(([cx, cy]) => [piece.x + cx, piece.y + cy]);
+}
+
+/** Center of T tetromino in board coords */
+export function tCenter(piece: ActivePiece): Coord {
+  return [piece.x + 1, piece.y + 1];
 }
 
 export function spawnPiece(id: PieceId): ActivePiece {

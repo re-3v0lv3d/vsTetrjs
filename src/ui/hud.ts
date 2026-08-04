@@ -19,7 +19,10 @@ export function updateHud(
   set('[data-score]', String(snap.score));
   set('[data-lines]', String(snap.lines));
   set('[data-level]', String(snap.level));
-  if (extra.rivalScore !== undefined) set('[data-rival-score]', String(extra.rivalScore));
+  if (extra.rivalScore !== undefined) {
+    set('[data-rival-score]', String(extra.rivalScore));
+    set('[data-rival-score-m]', String(extra.rivalScore));
+  }
 
   const effects = root.querySelector('[data-effects]');
   if (effects) {

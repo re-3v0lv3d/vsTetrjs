@@ -1,11 +1,5 @@
 import type { PowerupId } from '../game/powerups';
 
-export const PEER_PREFIX = 'vstetr-';
-
-export function roomPeerId(code: string): string {
-  return `${PEER_PREFIX}${code.toUpperCase()}`;
-}
-
 export function generateRoomCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';

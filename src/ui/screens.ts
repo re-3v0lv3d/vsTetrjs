@@ -22,11 +22,11 @@ export function renderAppShell(root: HTMLElement): void {
       <div class="panel-card">
         <button class="btn-back" data-action="back-menu">← Menú</button>
         <h2>Versus online</h2>
-        <p class="panel-sub">Crea una sala o únete con el código. Funciona por internet (relay MQTT, no hace falta estar en la misma red).</p>
+        <p class="panel-sub">Crea una sala o únete con el código.</p>
         <div class="versus-actions">
-          <button class="btn btn-primary" data-action="create-room">Crear sala</button>
+          <button class="btn btn-primary btn-block" data-action="create-room">Crear sala</button>
           <div class="join-row">
-            <input id="roomCodeInput" maxlength="6" placeholder="CÓDIGO" autocomplete="off" spellcheck="false" />
+            <input id="roomCodeInput" maxlength="6" placeholder="CÓDIGO" autocomplete="off" spellcheck="false" inputmode="text" enterkeyhint="go" />
             <button class="btn btn-secondary" data-action="join-room">Unirse</button>
           </div>
         </div>
@@ -43,12 +43,12 @@ export function renderAppShell(root: HTMLElement): void {
       <header class="game-top">
         <button class="btn-back" data-action="exit-game">← Salir</button>
         <div class="brand-mini">VSTETR.JS</div>
-        <button class="btn-text" data-action="toggle-mute" id="gameMute">♪</button>
+        <button class="btn-text btn-icon" data-action="toggle-mute" id="gameMute" aria-label="Sonido">♪</button>
       </header>
 
       <div class="game-layout" id="gameLayout">
         <aside class="side side-left">
-          <div class="stat-block">
+          <div class="stat-block hold-block">
             <label>HOLD</label>
             <canvas id="holdCanvas" width="88" height="88"></canvas>
           </div>
@@ -63,39 +63,46 @@ export function renderAppShell(root: HTMLElement): void {
         <div class="board-wrap">
           <canvas id="board"></canvas>
           <div id="countdown" class="countdown hidden"></div>
-          <div id="touchPad" class="touch-pad">
-            <button data-touch="rotCW">↻</button>
-            <div class="touch-mid">
-              <button data-touch="left">←</button>
-              <button data-touch="soft">↓</button>
-              <button data-touch="right">→</button>
-            </div>
-            <div class="touch-bot">
-              <button data-touch="hard">DROP</button>
-              <button data-touch="hold">HOLD</button>
-            </div>
+          <div class="rival-block mobile-rival hidden" id="rivalBlockMobile">
+            <label>RIVAL <span data-rival-score-m>0</span></label>
+            <canvas id="rivalBoardMobile"></canvas>
           </div>
         </div>
 
         <aside class="side side-right">
-          <div class="stat-block">
+          <div class="stat-block next-block">
             <label>NEXT</label>
-            <canvas data-next></canvas>
-            <canvas data-next></canvas>
-            <canvas data-next></canvas>
+            <div class="next-stack">
+              <canvas data-next></canvas>
+              <canvas data-next></canvas>
+              <canvas data-next></canvas>
+            </div>
           </div>
-          <div class="rival-block hidden" id="rivalBlock">
+          <div class="rival-block desktop-rival hidden" id="rivalBlock">
             <label>RIVAL <span data-rival-score>0</span></label>
             <canvas id="rivalBoard"></canvas>
           </div>
           <div class="powerups">
             <label>POWERUPS</label>
-            <button class="pu-slot" data-slot data-action="use-pu" data-i="0"></button>
-            <button class="pu-slot" data-slot data-action="use-pu" data-i="1"></button>
-            <button class="pu-slot" data-slot data-action="use-pu" data-i="2"></button>
-            <p class="hint">1/2/3 usar · Double+ o cada 4 líneas</p>
+            <div class="pu-row">
+              <button class="pu-slot" data-slot data-action="use-pu" data-i="0"></button>
+              <button class="pu-slot" data-slot data-action="use-pu" data-i="1"></button>
+              <button class="pu-slot" data-slot data-action="use-pu" data-i="2"></button>
+            </div>
+            <p class="hint">Toca un slot · Double+ o cada 4 líneas</p>
           </div>
         </aside>
+      </div>
+
+      <div id="touchPad" class="touch-pad" aria-label="Controles táctiles">
+        <div class="touch-cluster">
+          <button type="button" class="touch-btn touch-rot" data-touch="rotCW" aria-label="Rotar">↻</button>
+          <button type="button" class="touch-btn touch-hold" data-touch="hold" aria-label="Hold">H</button>
+          <button type="button" class="touch-btn touch-left" data-touch="left" aria-label="Izquierda">←</button>
+          <button type="button" class="touch-btn touch-soft" data-touch="soft" aria-label="Bajar">↓</button>
+          <button type="button" class="touch-btn touch-right" data-touch="right" aria-label="Derecha">→</button>
+          <button type="button" class="touch-btn touch-hard" data-touch="hard" aria-label="Hard drop">⬇</button>
+        </div>
       </div>
     </section>
 
@@ -104,8 +111,8 @@ export function renderAppShell(root: HTMLElement): void {
         <h2 id="resultTitle">Fin</h2>
         <p id="resultSub"></p>
         <div class="cta-row">
-          <button class="btn btn-primary" data-action="again">Otra vez</button>
-          <button class="btn btn-secondary" data-action="back-menu">Menú</button>
+          <button class="btn btn-primary btn-block" data-action="again">Otra vez</button>
+          <button class="btn btn-secondary btn-block" data-action="back-menu">Menú</button>
         </div>
       </div>
     </section>
@@ -121,4 +128,5 @@ export function showScreen(id: ScreenId): void {
   };
   document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
   document.getElementById(map[id])?.classList.add('active');
+  document.body.dataset.screen = id;
 }

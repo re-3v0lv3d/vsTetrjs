@@ -26,7 +26,15 @@ export const SCORE_TABLE = {
   hardDrop: 2,
   combo: 50,
   debuffSoloBonus: 150,
+  tSpinZero: 400,
+  tSpinMiniZero: 100,
+  tSpinMiniSingle: 200,
+  tSpinSingle: 800,
+  tSpinDouble: 1200,
+  tSpinTriple: 1600,
 } as const;
+
+export type TSpinKind = 'none' | 'mini' | 'full';
 
 export type CellColor =
   | 0

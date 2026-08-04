@@ -11,6 +11,9 @@ export class Renderer {
   private cell: number;
   readonly particles = new ParticleSystem();
   private flash = 0;
+  private banner = '';
+  private bannerLife = 0;
+  private tSpinFlash = 0;
 
   constructor(canvas: HTMLCanvasElement, cellSize = 30) {
     this.canvas = canvas;
@@ -33,8 +36,13 @@ export class Renderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  triggerClear(lines: number[], board: BoardGrid): void {
-    this.flash = 1;
+  triggerClear(lines: number[], board: BoardGrid, opts?: { tSpin?: boolean; label?: string }): void {
+    this.flash = opts?.tSpin ? 1.35 : 1;
+    if (opts?.tSpin) this.tSpinFlash = 1;
+    if (opts?.label) {
+      this.banner = opts.label;
+      this.bannerLife = opts.tSpin ? 1.15 : 0.7;
+    }
     for (const y of lines) {
       for (let x = 0; x < COLS; x++) {
         const cell = board[y]?.[x] ?? 0;
@@ -43,14 +51,26 @@ export class Renderer {
           (x + 0.5) * this.cell,
           (y - HIDDEN_ROWS + 0.5) * this.cell,
           fill,
-          8,
+          opts?.tSpin ? 14 : 8,
         );
       }
     }
   }
 
+  triggerBanner(label: string, tSpin = false): void {
+    this.banner = label;
+    this.bannerLife = tSpin ? 1.15 : 0.7;
+    if (tSpin) {
+      this.tSpinFlash = 1;
+      this.flash = Math.max(this.flash, 1.2);
+    }
+  }
+
   update(dt: number): void {
     this.flash = Math.max(0, this.flash - dt * 3);
+    this.tSpinFlash = Math.max(0, this.tSpinFlash - dt * 2.2);
+    this.bannerLife = Math.max(0, this.bannerLife - dt);
+    if (this.bannerLife <= 0) this.banner = '';
     this.particles.update(dt);
   }
 
@@ -105,6 +125,30 @@ export class Renderer {
     if (this.flash > 0) {
       ctx.fillStyle = `rgba(184, 255, 60, ${this.flash * 0.15})`;
       ctx.fillRect(0, 0, w, h);
+    }
+
+    if (this.tSpinFlash > 0) {
+      ctx.fillStyle = `rgba(199, 125, 255, ${this.tSpinFlash * 0.22})`;
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = `rgba(199, 125, 255, ${this.tSpinFlash * 0.7})`;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(2, 2, w - 4, h - 4);
+    }
+
+    if (this.banner && this.bannerLife > 0) {
+      const a = Math.min(1, this.bannerLife * 2);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(7, 16, 24, 0.55)';
+      ctx.fillRect(0, h * 0.38, w, h * 0.18);
+      ctx.fillStyle = this.banner.includes('T-SPIN') ? '#C77DFF' : THEME.lime;
+      ctx.font = `800 ${Math.max(14, Math.floor(cell * 0.72))}px Syne, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = 16;
+      ctx.fillText(this.banner, w / 2, h * 0.47);
+      ctx.restore();
     }
 
     // scanlines

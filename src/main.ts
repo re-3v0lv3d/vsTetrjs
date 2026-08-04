@@ -38,7 +38,6 @@ let lastStateSend = 0;
 let versusStarted = false;
 
 const boardCanvas = () => document.getElementById('board') as HTMLCanvasElement;
-const rivalCanvas = () => document.getElementById('rivalBoard') as HTMLCanvasElement;
 
 function setMute(next: boolean): void {
   muted = next;
@@ -57,14 +56,31 @@ function unlockAudio(): void {
 }
 
 function cellSize(): number {
-  if (window.innerWidth < 400) return 26;
-  if (window.innerWidth < 800) return 28;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (w <= 860) {
+    // Leave room for HUD + powerups + fixed touch pad
+    const availW = Math.min(w - 24, 360);
+    const availH = h - 220 - (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom') || '0', 10) || 0);
+    const byW = Math.floor(availW / 10);
+    const byH = Math.floor(Math.max(180, availH) / 20);
+    return Math.max(14, Math.min(28, byW, byH));
+  }
   return 30;
 }
 
 function setVersusUI(on: boolean): void {
   document.getElementById('rivalBlock')?.classList.toggle('hidden', !on);
+  document.getElementById('rivalBlockMobile')?.classList.toggle('hidden', !on);
   document.getElementById('gameLayout')?.classList.toggle('versus', on);
+}
+
+function drawRivalViews(board: number[] | null, blind: boolean): void {
+  if (!renderer) return;
+  const desk = document.getElementById('rivalBoard') as HTMLCanvasElement | null;
+  const mob = document.getElementById('rivalBoardMobile') as HTMLCanvasElement | null;
+  if (desk) renderer.drawMini(board, desk, blind);
+  if (mob) renderer.drawMini(board, mob, blind);
 }
 
 function stopLoop(): void {
@@ -90,9 +106,20 @@ function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
     onLock: () => sfx.lock(),
     onHardDrop: () => sfx.hardDrop(),
     onHold: () => sfx.hold(),
-    onClear: (lines, count) => {
-      sfx.line(count);
-      renderer?.triggerClear(lines, engine!.board);
+    onClear: (info) => {
+      if (info.tSpin !== 'none') sfx.tSpin(info.tSpin === 'full');
+      else if (info.count > 0) sfx.line(info.count);
+      if (info.count > 0) {
+        renderer?.triggerClear(info.lines, engine!.board, {
+          tSpin: info.tSpin !== 'none',
+          label: info.label,
+        });
+      } else if (info.label) {
+        renderer?.triggerBanner(info.label, true);
+      }
+    },
+    onTSpin: () => {
+      /* sound handled in onClear */
     },
     onPowerupGain: () => sfx.powerupGain(),
     onLevel: (lv) => music.setIntensity(0.8 + lv * 0.12),
@@ -151,7 +178,7 @@ function loop(now: number): void {
 
   if (mode === 'versus') {
     if (performance.now() > rivalBlindUntil) rivalBlind = false;
-    renderer.drawMini(rivalBoard, rivalCanvas(), rivalBlind);
+    drawRivalViews(rivalBoard, rivalBlind);
     if (now - lastStateSend > 80) {
       lastStateSend = now;
       room?.send({
@@ -222,7 +249,9 @@ function endMatch(title: string, sub: string): void {
 }
 
 function ensureRoom(): PeerRoom {
-  room ??= new PeerRoom({
+  // Always fresh instance (avoids stale PeerJS/MQTT state after failed joins)
+  void room?.destroy();
+  room = new PeerRoom({
     onStatus: (text) => {
       const el = document.getElementById('roomStatus');
       if (el) el.textContent = text;
@@ -342,7 +371,12 @@ async function joinRoom(): Promise<void> {
     await r.join(code);
   } catch (e) {
     const el = document.getElementById('roomStatus');
-    if (el) el.textContent = `No se pudo unir: ${String(e)}`;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (el) {
+      el.textContent = msg.includes('peer')
+        ? 'Versión antigua en caché. Recarga con Ctrl+Shift+R (o borra caché) en AMBOS dispositivos.'
+        : `No se pudo unir: ${msg}`;
+    }
   }
 }
 
