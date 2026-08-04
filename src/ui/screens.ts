@@ -22,7 +22,7 @@ export function renderAppShell(root: HTMLElement): void {
       <div class="panel-card">
         <button class="btn-back" data-action="back-menu">← Menú</button>
         <h2>Versus online</h2>
-        <p class="panel-sub">Crea una sala o únete con el código. P2P vía WebRTC (GitHub Pages).</p>
+        <p class="panel-sub">Crea una sala o únete con el código. Funciona por internet (relay MQTT, no hace falta estar en la misma red).</p>
         <div class="versus-actions">
           <button class="btn btn-primary" data-action="create-room">Crear sala</button>
           <div class="join-row">

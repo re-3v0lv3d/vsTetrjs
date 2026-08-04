@@ -1,6 +1,6 @@
 # VSTETR.JS
 
-Rework arcade de Tetris en **Vite + TypeScript + Canvas**, con versus online P2P (PeerJS / WebRTC), powerups y música procedimental.
+Rework arcade de Tetris en **Vite + TypeScript + Canvas**, con versus online por código de sala, powerups y música procedimental.
 
 Pensado para publicarse en **GitHub Pages** (solo estático; no hace falta servidor propio).
 
@@ -30,9 +30,7 @@ URL típica: `https://<usuario>.github.io/<repo>/`
 2. El rival elige **Versus online** → pega el código → **Unirse**.
 3. Al conectar, countdown y a jugar. Gana quien no haga top-out.
 
-La señalización usa el cloud de PeerJS; la partida va por WebRTC DataChannel. Si un firewall/NAT estricto bloquea WebRTC, la sala puede fallar al unirse.
-
-Opcional: apunta a tu propio PeerServer con variables `VITE_PEER_HOST`, `VITE_PEER_PORT`, `VITE_PEER_PATH`, `VITE_PEER_SECURE`, `VITE_PEER_KEY`.
+El versus usa un **relay MQTT público por WebSocket** (no WebRTC), así que funciona entre redes distintas / 4G / fibra sin TURN. Opcional: `VITE_MQTT_URL` para tu propio broker.
 
 ## Powerups
 
@@ -45,7 +43,7 @@ Se ganan al limpiar **2+ líneas** (o con combo). En versus, los debuffs van al 
 
 - Vite 7 + TypeScript
 - Canvas 2D
-- PeerJS
+- MQTT.js (versus online)
 - Web Audio (música + SFX sintéticos)
 
 ## Scripts
