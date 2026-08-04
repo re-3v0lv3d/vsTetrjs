@@ -55,16 +55,48 @@ function unlockAudio(): void {
   music.setMuted(muted);
 }
 
+const UI_SCALE_MIN = 0.7;
+const UI_SCALE_MAX = 1.25;
+const UI_SCALE_STEP = 0.1;
+const UI_SCALE_KEY = 'vstetr-ui-scale';
+
+let uiScale = loadUiScale();
+
+function loadUiScale(): number {
+  const raw = Number(localStorage.getItem(UI_SCALE_KEY));
+  if (!Number.isFinite(raw)) return 1;
+  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, Math.round(raw * 10) / 10));
+}
+
+function applyUiScale(): void {
+  document.documentElement.style.setProperty('--ui-scale', String(uiScale));
+  const label = document.getElementById('uiZoomLabel');
+  if (label) label.textContent = `${Math.round(uiScale * 100)}%`;
+  renderer?.resize(cellSize());
+}
+
+function bumpUiScale(delta: number): void {
+  uiScale = Math.min(
+    UI_SCALE_MAX,
+    Math.max(UI_SCALE_MIN, Math.round((uiScale + delta) * 10) / 10),
+  );
+  localStorage.setItem(UI_SCALE_KEY, String(uiScale));
+  applyUiScale();
+  sfx.ui();
+}
+
 function cellSize(): number {
   const w = window.innerWidth;
   const h = window.innerHeight;
   if (w <= 860) {
-    // Leave room for HUD + powerups + fixed touch pad
-    const availW = Math.min(w - 24, 360);
-    const availH = h - 220 - (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom') || '0', 10) || 0);
+    // Leave room for HUD + powerups + fixed touch pad (scales with UI zoom)
+    const touchBudget = 150 * uiScale;
+    const hudBudget = 90 * uiScale;
+    const availW = Math.min(w - 24, 360) * uiScale;
+    const availH = h - touchBudget - hudBudget - 24;
     const byW = Math.floor(availW / 10);
-    const byH = Math.floor(Math.max(180, availH) / 20);
-    return Math.max(14, Math.min(28, byW, byH));
+    const byH = Math.floor(Math.max(160, availH) / 20);
+    return Math.max(12, Math.min(30, byW, byH));
   }
   return 30;
 }
@@ -432,6 +464,12 @@ app.addEventListener('click', (e) => {
       setMute(!muted);
       unlockAudio();
       break;
+    case 'ui-zoom-in':
+      bumpUiScale(UI_SCALE_STEP);
+      break;
+    case 'ui-zoom-out':
+      bumpUiScale(-UI_SCALE_STEP);
+      break;
     case 'exit-game':
       exitToMenu();
       break;
@@ -486,4 +524,5 @@ window.addEventListener('beforeunload', () => {
   void room?.destroy();
 });
 
+applyUiScale();
 showScreen('menu');

@@ -12,6 +12,11 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
   --touch-h: 0px;
+  --ui-scale: 1;
+}
+
+.mobile-only {
+  display: none;
 }
 
 *,
@@ -371,6 +376,48 @@ body[data-screen='game'] {
   font-size: 0.95rem;
 }
 
+.game-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ui-zoom {
+  display: none;
+  align-items: center;
+  gap: 0.2rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.15rem;
+}
+
+.zoom-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--lime);
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.zoom-btn:active {
+  background: rgba(184, 255, 60, 0.15);
+  color: var(--text);
+}
+
+.zoom-label {
+  min-width: 2.6rem;
+  text-align: center;
+  font-size: 0.65rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
 .game-layout {
   display: grid;
   grid-template-columns: 120px auto 140px;
@@ -661,9 +708,19 @@ body[data-screen='game'] {
     width: 100%;
   }
 
+  .mobile-only,
+  .ui-zoom {
+    display: flex;
+  }
+
+  .brand-mini {
+    font-size: 0.8rem;
+  }
+
   .screen-game {
-    --touch-h: 148px;
+    --touch-h: calc(148px * var(--ui-scale));
     padding-bottom: calc(var(--touch-h) + var(--safe-bottom) + 0.35rem);
+    gap: calc(0.4rem * var(--ui-scale));
   }
 
   .game-layout {
@@ -672,7 +729,7 @@ body[data-screen='game'] {
       'hud'
       'board'
       'power';
-    gap: 0.45rem;
+    gap: calc(0.45rem * var(--ui-scale));
     justify-items: stretch;
     align-content: start;
   }
@@ -696,8 +753,8 @@ body[data-screen='game'] {
   }
 
   .side-left .hold-block canvas {
-    width: 56px !important;
-    height: 56px !important;
+    width: calc(56px * var(--ui-scale)) !important;
+    height: calc(56px * var(--ui-scale)) !important;
   }
 
   .side-left .nums {
@@ -740,7 +797,7 @@ body[data-screen='game'] {
     position: absolute;
     top: 0.35rem;
     right: 0.35rem;
-    width: 72px;
+    width: calc(72px * var(--ui-scale));
     padding: 0.3rem;
     background: rgba(7, 16, 24, 0.82);
     z-index: 2;
@@ -766,7 +823,7 @@ body[data-screen='game'] {
   .pu-slot {
     flex: 1;
     min-width: 0;
-    min-height: 52px;
+    min-height: calc(48px * var(--ui-scale));
     text-align: center;
     padding: 0.35rem 0.25rem;
     box-shadow: none;
@@ -803,6 +860,14 @@ body[data-screen='game'] {
 
   .touch-pad .touch-cluster {
     pointer-events: auto;
+    width: min(calc(340px * var(--ui-scale)), 100%);
+    gap: calc(0.45rem * var(--ui-scale));
+  }
+
+  .touch-btn {
+    min-height: calc(52px * var(--ui-scale));
+    font-size: calc(1.25rem * var(--ui-scale));
+    border-radius: calc(10px * var(--ui-scale));
   }
 
   #board {

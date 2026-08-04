@@ -43,7 +43,14 @@ export function renderAppShell(root: HTMLElement): void {
       <header class="game-top">
         <button class="btn-back" data-action="exit-game">← Salir</button>
         <div class="brand-mini">VSTETR.JS</div>
-        <button class="btn-text btn-icon" data-action="toggle-mute" id="gameMute" aria-label="Sonido">♪</button>
+        <div class="game-top-actions">
+          <div class="ui-zoom mobile-only" aria-label="Tamaño de interfaz">
+            <button type="button" class="zoom-btn" data-action="ui-zoom-out" aria-label="Más pequeño">−</button>
+            <span class="zoom-label" id="uiZoomLabel">100%</span>
+            <button type="button" class="zoom-btn" data-action="ui-zoom-in" aria-label="Más grande">+</button>
+          </div>
+          <button class="btn-text btn-icon" data-action="toggle-mute" id="gameMute" aria-label="Sonido">♪</button>
+        </div>
       </header>
 
       <div class="game-layout" id="gameLayout">
