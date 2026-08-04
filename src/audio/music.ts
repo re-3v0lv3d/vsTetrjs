@@ -32,6 +32,7 @@ export class MusicSynth {
     this.ensure();
     this.playing = true;
     this.step = 0;
+    this.startedAt = performance.now();
     this.schedule();
   }
 
@@ -58,9 +59,30 @@ export class MusicSynth {
     }
   }
 
+  private startedAt = 0;
+
+  /** 0–1 continuous pulse synced to BPM (visuals) */
+  getPulse(): number {
+    const bpm = this.getBpm();
+    const t = this.playing && this.startedAt
+      ? (performance.now() - this.startedAt) / 1000
+      : performance.now() / 1000;
+    const beatPhase = (t * bpm) / 60; // beats
+    const frac = beatPhase - Math.floor(beatPhase);
+    // sharp kick envelope + softer eighth
+    const kick = Math.pow(1 - frac, 2.4);
+    const eighth = Math.pow(1 - ((beatPhase * 2) % 1), 1.8) * 0.35;
+    const breathe = 0.5 + 0.5 * Math.sin(beatPhase * Math.PI * 2);
+    return Math.min(1, kick * 0.85 + eighth + breathe * 0.12);
+  }
+
+  getBpm(): number {
+    return 112 + (this.intensity - 1) * 6;
+  }
+
   private schedule(): void {
     if (!this.playing || !this.ctx || !this.master) return;
-    const bpm = 112 + (this.intensity - 1) * 6;
+    const bpm = this.getBpm();
     const stepDur = 60 / bpm / 4;
 
     this.playStep(this.step % 64, this.ctx.currentTime + 0.01);

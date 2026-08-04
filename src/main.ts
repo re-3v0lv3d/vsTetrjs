@@ -136,7 +136,10 @@ function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
   engine = new GameEngine(gameMode, seed, {
     onMove: () => sfx.move(),
     onRotate: () => sfx.rotate(),
-    onLock: () => sfx.place(),
+    onLock: () => {
+      sfx.place();
+      renderer?.triggerLockFlash();
+    },
     onHardDrop: () => sfx.hardDrop(),
     onHold: () => sfx.hold(),
     onClear: (info) => {
@@ -198,11 +201,16 @@ function loop(now: number): void {
 
   input.update(dt);
   engine.update(dt);
+  renderer.setBeatPulse(music.getPulse());
   renderer.update(dt);
 
   const snap = engine.snapshot();
   const blind = performance.now() < snap.effects.blindUntil;
   renderer.draw(snap, { blind });
+
+  // sync UI pulse vars for CSS
+  document.documentElement.style.setProperty('--beat', music.getPulse().toFixed(3));
+  document.body.classList.toggle('vs-pulse-hot', music.getPulse() > 0.75);
 
   updateHud(app, snap, {
     rivalScore,

@@ -4,6 +4,9 @@ import { POWERUPS } from '../game/powerups';
 import { SHAPES } from '../game/pieces';
 import { colorFor } from '../render/themes';
 
+let lastScore = -1;
+let lastLevel = -1;
+
 export function updateHud(
   root: HTMLElement,
   snap: EngineSnapshot,
@@ -12,14 +15,26 @@ export function updateHud(
     effectLabels?: string[];
   } = {},
 ): void {
-  const set = (sel: string, text: string) => {
+  const bump = (sel: string, text: string, changed: boolean) => {
     const el = root.querySelector(sel);
-    if (el) el.textContent = text;
+    if (!el) return;
+    if (el.textContent !== text) el.textContent = text;
+    if (changed) {
+      el.classList.remove('stat-bump');
+      void (el as HTMLElement).offsetWidth;
+      el.classList.add('stat-bump');
+    }
   };
-  set('[data-score]', String(snap.score));
-  set('[data-lines]', String(snap.lines));
-  set('[data-level]', String(snap.level));
+  bump('[data-score]', String(snap.score), snap.score !== lastScore && lastScore >= 0);
+  bump('[data-lines]', String(snap.lines), false);
+  bump('[data-level]', String(snap.level), snap.level !== lastLevel && lastLevel >= 0);
+  lastScore = snap.score;
+  lastLevel = snap.level;
   if (extra.rivalScore !== undefined) {
+    const set = (sel: string, text: string) => {
+      const el = root.querySelector(sel);
+      if (el) el.textContent = text;
+    };
     set('[data-rival-score]', String(extra.rivalScore));
     set('[data-rival-score-m]', String(extra.rivalScore));
   }
@@ -34,7 +49,13 @@ export function updateHud(
   slots.forEach((el, i) => {
     const id = snap.slots[i];
     const btn = el as HTMLElement;
+    const wasFilled = btn.classList.contains('filled');
     btn.classList.toggle('filled', !!id);
+    if (id && !wasFilled) {
+      btn.classList.remove('pu-gain');
+      void btn.offsetWidth;
+      btn.classList.add('pu-gain');
+    }
     if (id) {
       const def = POWERUPS[id];
       btn.style.setProperty('--pu', def.color);
