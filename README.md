@@ -58,9 +58,12 @@ npm run preview   # previsualizar build
 
 ## GitHub Pages
 
-1. Settings → Pages → Source: **GitHub Actions**
-2. Push a `main` (workflow `.github/workflows/deploy.yml`)
-3. El build usa `VITE_BASE=/<nombre-repo>/` automáticamente
+1. Push a `main` (el workflow construye Vite y publica la rama `gh-pages`)
+2. Settings → Pages → Source: **Deploy from a branch**
+3. Branch: **`gh-pages`** / folder: **`/ (root)`** → Save
+4. URL: `https://<usuario>.github.io/<repo>/`
+
+> Importante: no elijas la rama `main` como source (serviría el `index.html` de desarrollo y verías pantalla en blanco).
 
 ---
 
