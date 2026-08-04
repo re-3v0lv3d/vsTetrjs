@@ -89,14 +89,15 @@ function cellSize(): number {
   const w = window.innerWidth;
   const h = window.innerHeight;
   if (w <= 860) {
-    // Leave room for HUD + powerups + fixed touch pad (scales with UI zoom)
+    // Leave room for left rail (~30%) + HUD + touch pad
     const touchBudget = 150 * uiScale;
-    const hudBudget = 90 * uiScale;
-    const availW = Math.min(w - 24, 360) * uiScale;
+    const hudBudget = 78 * uiScale;
+    const railFrac = 0.3;
+    const availW = Math.min(w * (1 - railFrac) - 16, 340) * uiScale;
     const availH = h - touchBudget - hudBudget - 24;
     const byW = Math.floor(availW / 10);
     const byH = Math.floor(Math.max(160, availH) / 20);
-    return Math.max(12, Math.min(30, byW, byH));
+    return Math.max(12, Math.min(28, byW, byH));
   }
   return 30;
 }

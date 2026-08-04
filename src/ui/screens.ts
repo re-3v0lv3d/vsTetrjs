@@ -64,10 +64,6 @@ export function renderAppShell(root: HTMLElement): void {
             <div><span>LÍNEAS</span><strong data-lines>0</strong></div>
             <div><span>NIVEL</span><strong data-level>1</strong></div>
           </div>
-          <div class="rival-block mobile-rival hidden" id="rivalBlockMobile">
-            <label>RIVAL <span data-rival-score-m>0</span></label>
-            <canvas id="rivalBoardMobile"></canvas>
-          </div>
           <div class="effects" data-effects></div>
         </aside>
 
@@ -88,6 +84,10 @@ export function renderAppShell(root: HTMLElement): void {
           <div class="rival-block desktop-rival hidden" id="rivalBlock">
             <label>RIVAL <span data-rival-score>0</span></label>
             <canvas id="rivalBoard"></canvas>
+          </div>
+          <div class="rival-block mobile-rival hidden" id="rivalBlockMobile">
+            <label>RIVAL <span data-rival-score-m>0</span></label>
+            <canvas id="rivalBoardMobile"></canvas>
           </div>
           <div class="powerups">
             <label>POWERUPS</label>
