@@ -20,10 +20,14 @@ const BROKERS = [
 
 type Wire =
   | { v: 1; from: string; kind: 'join' | 'bye' | 'hb' }
-  | { v: 1; from: string; kind: 'game'; payload: NetMessage };
+  | { v: 1; from: string; kind: 'game'; payload: NetMessage; mid?: string };
 
 function topicFor(code: string): string {
-  return `vstetr/v1/room/${code.toUpperCase()}`;
+  return `vstetr/v2/room/${code.toUpperCase()}`;
+}
+
+function reliable(msg: NetMessage): boolean {
+  return msg.t !== 'state' && msg.t !== 'ping' && msg.t !== 'pong';
 }
 
 export class PeerRoom {
@@ -34,12 +38,18 @@ export class PeerRoom {
   private hbTimer: number | null = null;
   private lastPeerHb = 0;
   private watchTimer: number | null = null;
+  private queue: NetMessage[] = [];
+  private seen = new Set<string>();
   role: RoomRole | null = null;
   code: string | null = null;
   private cbs: RoomCallbacks;
 
   constructor(cbs: RoomCallbacks) {
     this.cbs = cbs;
+  }
+
+  get connected(): boolean {
+    return !!this.client?.connected;
   }
 
   async host(): Promise<string> {
@@ -49,7 +59,7 @@ export class PeerRoom {
     this.code = code;
     this.cbs.onStatus('Conectando al servidor…');
     await this.connectMqtt(code);
-    this.cbs.onStatus(`Sala ${code} — esperando rival (online)…`);
+    this.cbs.onStatus(`Sala ${code} — esperando rival…`);
     return code;
   }
 
@@ -64,7 +74,6 @@ export class PeerRoom {
     this.publishSys('join');
     this.cbs.onStatus('Buscando anfitrión…');
 
-    // Keep announcing until the host answers (hello/start/hb)
     await new Promise<void>((resolve, reject) => {
       const started = performance.now();
       const iv = window.setInterval(() => {
@@ -88,6 +97,8 @@ export class PeerRoom {
     this.selfId = `p_${Math.random().toString(36).slice(2, 10)}`;
     this.topic = topicFor(code);
     this.linked = false;
+    this.queue = [];
+    this.seen.clear();
 
     let lastErr: unknown;
     for (const url of BROKERS) {
@@ -120,7 +131,7 @@ export class PeerRoom {
       }, 12000);
 
       client.on('connect', () => {
-        client.subscribe(this.topic, { qos: 0 }, (err) => {
+        client.subscribe(this.topic, { qos: 1 }, (err) => {
           if (err) {
             clearTimeout(t);
             reject(err);
@@ -128,8 +139,13 @@ export class PeerRoom {
           }
           clearTimeout(t);
           this.startHeartbeat();
+          this.flushQueue();
           resolve();
         });
+      });
+
+      client.on('reconnect', () => {
+        this.flushQueue();
       });
 
       client.on('message', (_topic, buf) => {
@@ -162,7 +178,6 @@ export class PeerRoom {
 
     if (data.kind === 'hb' || data.kind === 'join') {
       this.lastPeerHb = performance.now();
-      // Host: guest appeared. Guest: host heartbeat proves room exists.
       if (data.kind === 'join' && this.role === 'host') this.markLinked();
       if (data.kind === 'hb' && this.role === 'guest') this.markLinked();
       return;
@@ -176,6 +191,14 @@ export class PeerRoom {
     if (data.kind === 'game') {
       this.lastPeerHb = performance.now();
       this.markLinked();
+      if (data.mid) {
+        if (this.seen.has(data.mid)) return;
+        this.seen.add(data.mid);
+        if (this.seen.size > 80) {
+          const first = this.seen.values().next().value;
+          if (first) this.seen.delete(first);
+        }
+      }
       this.cbs.onMessage(data.payload);
     }
   }
@@ -186,12 +209,13 @@ export class PeerRoom {
     this.lastPeerHb = performance.now();
     this.cbs.onConnected(this.role, this.code);
     this.cbs.onStatus('Conectado');
+    this.flushQueue();
   }
 
   private publishSys(kind: 'join' | 'bye' | 'hb'): void {
     if (!this.client?.connected) return;
     const wire: Wire = { v: 1, from: this.selfId, kind };
-    this.client.publish(this.topic, JSON.stringify(wire), { qos: 0 });
+    this.client.publish(this.topic, JSON.stringify(wire), { qos: kind === 'hb' ? 0 : 1 });
   }
 
   private startHeartbeat(): void {
@@ -220,10 +244,33 @@ export class PeerRoom {
     }
   }
 
+  private flushQueue(): void {
+    if (!this.client?.connected || this.queue.length === 0) return;
+    const pending = this.queue.splice(0);
+    for (const msg of pending) this.publishGame(msg);
+  }
+
+  private publishGame(msg: NetMessage, copies = 1): void {
+    if (!this.client?.connected) {
+      this.queue.push(msg);
+      return;
+    }
+    const mid =
+      reliable(msg) && msg.t !== 'hello' && msg.t !== 'ready' && msg.t !== 'start'
+        ? `${this.selfId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+        : undefined;
+    const wire: Wire = { v: 1, from: this.selfId, kind: 'game', payload: msg, mid };
+    const body = JSON.stringify(wire);
+    const qos = reliable(msg) ? 1 : 0;
+    for (let i = 0; i < copies; i++) {
+      this.client.publish(this.topic, body, { qos });
+    }
+  }
+
   send(msg: NetMessage): void {
-    if (!this.client?.connected) return;
-    const wire: Wire = { v: 1, from: this.selfId, kind: 'game', payload: msg };
-    this.client.publish(this.topic, JSON.stringify(wire), { qos: 0 });
+    // Attacks: triple-send for flaky public brokers (deduped by mid on receive)
+    const copies = msg.t === 'attack' ? 3 : 1;
+    this.publishGame(msg, copies);
   }
 
   async destroy(): Promise<void> {
@@ -241,5 +288,7 @@ export class PeerRoom {
     this.role = null;
     this.code = null;
     this.topic = '';
+    this.queue = [];
+    this.seen.clear();
   }
 }

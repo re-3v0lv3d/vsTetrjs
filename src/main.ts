@@ -3,7 +3,7 @@ import { MusicSynth } from './audio/music';
 import { Sfx } from './audio/sfx';
 import { GameEngine } from './game/engine';
 import { InputController } from './game/input';
-import { isSelfBuff, POWERUPS } from './game/powerups';
+import { isSelfBuff, POWERUPS, type PowerupId } from './game/powerups';
 import { PeerRoom } from './net/peerRoom';
 import type { NetMessage } from './net/protocol';
 import { Renderer } from './render/renderer';
@@ -135,7 +135,7 @@ function startEngine(gameMode: 'solo' | 'versus', seed: number): void {
   engine = new GameEngine(gameMode, seed, {
     onMove: () => sfx.move(),
     onRotate: () => sfx.rotate(),
-    onLock: () => sfx.lock(),
+    onLock: () => sfx.place(),
     onHardDrop: () => sfx.hardDrop(),
     onHold: () => sfx.hold(),
     onClear: (info) => {
@@ -234,6 +234,7 @@ function usePowerup(slot: number): void {
 
   if (isSelfBuff(id)) {
     sfx.powerupSend();
+    renderer?.triggerBanner(POWERUPS[id].label.toUpperCase(), false);
     return;
   }
 
@@ -242,18 +243,23 @@ function usePowerup(slot: number): void {
     return;
   }
 
-  // versus debuff -> send to rival
+  // versus debuff -> send to rival (reliable MQTT)
   sfx.powerupSend();
-  if (id === 'garbage') {
-    room?.send({
-      t: 'attack',
-      id,
-      rows: POWERUPS.garbage.garbageRows ?? 2,
-      hole: Math.floor(Math.random() * 10),
-    });
-  } else {
-    room?.send({ t: 'attack', id });
+  if (!room?.connected) {
+    renderer?.triggerBanner('SIN RIVAL', false);
   }
+  const attack =
+    id === 'garbage'
+      ? {
+          t: 'attack' as const,
+          id,
+          rows: POWERUPS.garbage.garbageRows ?? 2,
+          hole: Math.floor(Math.random() * 10),
+        }
+      : { t: 'attack' as const, id };
+  room?.send(attack);
+  renderer?.triggerBanner(`→ ${POWERUPS[id].label.toUpperCase()}`, false);
+
   if (id === 'blind') {
     rivalBlind = true;
     rivalBlindUntil = performance.now() + 4000;
@@ -343,11 +349,15 @@ function onNetMessage(msg: NetMessage): void {
       rivalBoard = msg.board;
       rivalScore = msg.score;
       break;
-    case 'attack':
+    case 'attack': {
       if (!engine) return;
+      const pid = msg.id as PowerupId;
+      if (!(pid in POWERUPS) || POWERUPS[pid].kind !== 'debuff') return;
       sfx.powerupHit();
-      engine.receiveAttack(msg.id, { rows: msg.rows, hole: msg.hole });
+      engine.receiveAttack(pid, { rows: msg.rows, hole: msg.hole });
+      renderer?.triggerBanner(POWERUPS[pid].label.toUpperCase(), true);
       break;
+    }
     case 'gameOver':
       if (msg.winner === 'rival') {
         // opponent says they lost -> we win. But message says winner from their POV:

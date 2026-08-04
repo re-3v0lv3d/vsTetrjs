@@ -126,6 +126,7 @@ export class GameEngine {
   private softDropping = false;
   private events: EngineEvents;
   private pendingGarbage = 0;
+  private pendingGarbageHoles: number[] = [];
   private linesSincePowerup = 0;
   /** Last player action that moved the piece */
   private lastAction: 'none' | 'move' | 'rotate' | 'drop' = 'none';
@@ -484,26 +485,31 @@ export class GameEngine {
     const now = performance.now();
     if (id === 'garbage') {
       const rows = meta?.rows ?? 2;
+      const hole = meta?.hole ?? Math.floor(Math.random() * COLS);
+      for (let i = 0; i < rows; i++) {
+        // Prefer provided hole for first row, randomize extras
+        this.pendingGarbageHoles.push(i === 0 ? hole : Math.floor(Math.random() * COLS));
+      }
       this.pendingGarbage += rows;
       this.shake = 1.2;
     } else if (id === 'blind') {
-      this.effects.blindUntil = now + 4000;
+      this.effects.blindUntil = Math.max(this.effects.blindUntil, now + 4000);
       this.events.onEffect?.(id, true);
       this.shake = 0.8;
     } else if (id === 'slow') {
-      this.effects.slowUntil = now + 5000;
+      this.effects.slowUntil = Math.max(this.effects.slowUntil, now + 5000);
       this.events.onEffect?.(id, true);
     } else if (id === 'lock') {
-      this.effects.invertUntil = now + 5000;
+      this.effects.invertUntil = Math.max(this.effects.invertUntil, now + 5000);
       this.events.onEffect?.(id, true);
       this.shake = 0.6;
     } else if (id === 'stain') {
-      this.effects.stainUntil = now + 6000;
+      this.effects.stainUntil = Math.max(this.effects.stainUntil, now + 6000);
       this.effects.stainSeed = (Math.random() * 1e9) >>> 0;
       this.events.onEffect?.(id, true);
       this.shake = 0.5;
     } else if (id === 'rush') {
-      this.effects.rushUntil = now + 6000;
+      this.effects.rushUntil = Math.max(this.effects.rushUntil, now + 6000);
       this.events.onEffect?.(id, true);
       this.shake = 0.7;
     }
@@ -511,7 +517,7 @@ export class GameEngine {
 
   private applyPendingGarbage(): void {
     while (this.pendingGarbage > 0) {
-      const hole = Math.floor(Math.random() * COLS);
+      const hole = this.pendingGarbageHoles.shift() ?? Math.floor(Math.random() * COLS);
       const ok = addGarbage(this.board, 1, hole);
       this.pendingGarbage--;
       if (!ok) {

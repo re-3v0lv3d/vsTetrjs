@@ -39,7 +39,29 @@ export class Sfx {
   }
 
   lock(): void {
-    this.beep(120, 0.08, 'triangle', 0.06, -40);
+    this.beep(95, 0.07, 'triangle', 0.1, -30);
+    this.beep(160, 0.05, 'square', 0.05);
+  }
+
+  /** Solid thud when a piece settles on the stack */
+  place(): void {
+    if (this.muted) return;
+    const ctx = this.ac();
+    const t = ctx.currentTime;
+    // low thud
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(110, t);
+    osc.frequency.exponentialRampToValueAtTime(48, t + 0.09);
+    g.gain.setValueAtTime(0.16, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.12);
+    // click
+    this.beep(220, 0.035, 'square', 0.045);
   }
 
   line(n: number): void {
